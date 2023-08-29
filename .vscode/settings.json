@@ -3,7 +3,4 @@
         "/root/pic3/pic3/pic3cpp/src",
     ],
     "C_Cpp.errorSquiggles": "disabled",
-    "files.associations": {
-        "model.h": "c"
-    }
 }

@@ -29,6 +29,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "IC3.h"
 #include "Solver.h"
 #include "Vec.h"
+#include "pic3.h"
 
 // A reference implementation of IC3, i.e., one that is meant to be
 // read and used as a starting point for tuning, extending, and
@@ -131,10 +132,11 @@ namespace IC3
 
 class IC3 {
     public:
-	IC3(Model &_model)
+	IC3(Model &_model, LemmaSharer _sharer)
 		: verbose(0)
 		, random(false)
 		, model(_model)
+		, sharer(_sharer)
 		, k(1)
 		, nextState(0)
 		, litOrder()
@@ -225,6 +227,7 @@ class IC3 {
 	}
 
 	Model &model;
+	LemmaSharer sharer;
 	size_t k;
 
 	// The State structures are for tracking trees of (lifted) CTIs.
@@ -761,6 +764,7 @@ class IC3 {
 			cls.push(~*i);
 		for (size_t i = toAll ? 1 : level; i <= level; ++i)
 			frames[i].consecution->addClause(cls);
+		pic3_share_lemma(&this->sharer, level, cube);
 		if (toAll && !silent)
 			updateLitOrder(cube, level);
 	}
@@ -960,7 +964,7 @@ class IC3 {
 			     << endl;
 	}
 
-	friend bool check(Model &, int, bool, bool);
+	friend bool check(Model &, LemmaSharer, int, bool, bool);
 };
 
 // IC3 does not check for 0-step and 1-step reachability, so do it
@@ -989,11 +993,12 @@ bool baseCases(Model &model)
 }
 
 // External function to make the magic happen.
-bool check(Model &model, int verbose, bool basic, bool random)
+bool check(Model &model, LemmaSharer sharer, int verbose, bool basic,
+	   bool random)
 {
 	if (!baseCases(model))
 		return false;
-	IC3 ic3(model);
+	IC3 ic3(model, sharer);
 	ic3.verbose = verbose;
 	if (basic) {
 		ic3.maxDepth = 0;

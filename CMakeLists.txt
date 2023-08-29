@@ -16,8 +16,8 @@ target_link_libraries(ic3ref PUBLIC minisat-lib-static)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../pic3/pic3/pic3cpp" pic3cpp)
 target_link_libraries(ic3ref PUBLIC pic3cpp)
 
-add_executable(ic3refmain main.cpp)
-target_link_libraries(ic3refmain PUBLIC ic3ref)
+# add_executable(ic3refmain main.cpp)
+# target_link_libraries(ic3refmain PUBLIC ic3ref)
 
 install(TARGETS ic3ref
         RUNTIME DESTINATION bin

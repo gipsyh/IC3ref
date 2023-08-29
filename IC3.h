@@ -25,15 +25,17 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define IC3_h_INCLUDED
 
 #include "Model.h"
+#include "pic3.h"
 
 namespace IC3
 {
 
-bool check(Model &model,
+bool check(Model &model, LemmaSharer sharer,
 	   int verbose = 0, // 0: silent, 1: stats, 2: informative
 	   bool basic = false, // simple inductive generalization
 	   bool random = false); // random runs for statistical profiling
-
 }
+
+void pic3_share_lemma(struct LemmaSharer *sharer, int k, LitVec &cube);
 
 #endif
