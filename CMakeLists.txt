@@ -4,7 +4,7 @@ project(ic3ref VERSION 1.0.0)
 enable_language(C CXX)
 set(CMAKE_CXX_STANDARD 11)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -D__STDC_LIMIT_MACROS -D__STDC_FORMAT_MACROS -O3 -g -fpermissive")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -D__STDC_LIMIT_MACROS -D__STDC_FORMAT_MACROS -g -fpermissive")
 
 add_library(ic3ref STATIC IC3.cpp aiger/aiger.c Model.cpp pic3.cpp)
 target_include_directories(ic3ref PUBLIC aiger minisat minisat/minisat/core minisat/minisat/simp

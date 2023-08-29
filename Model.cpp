@@ -27,7 +27,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "SimpSolver.h"
 #include "Vec.h"
 
-Minisat::Var Var::gvi = 0;
+__thread Minisat::Var Var::gvi = 0;
 
 Model::~Model()
 {

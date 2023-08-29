@@ -80,7 +80,7 @@ class Var {
 	}
 
     private:
-	static Minisat::Var gvi; // aligned with solvers
+	__thread static Minisat::Var gvi; // aligned with solvers
 	Minisat::Var _var; // corresponding Minisat::Var in *any* solver
 	string _name;
 };
