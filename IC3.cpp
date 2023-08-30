@@ -747,7 +747,7 @@ class IC3 {
 	// Adds cube to frames at and below level, unless !toAll, in which
 	// case only to level.
 	void addCube(size_t level, LitVec &cube, bool toAll = true,
-		     bool silent = false)
+		     bool silent = false, bool share = true)
 	{
 		sort(cube.begin(), cube.end());
 		pair<CubeSet::iterator, bool> rv =
@@ -764,7 +764,9 @@ class IC3 {
 			cls.push(~*i);
 		for (size_t i = toAll ? 1 : level; i <= level; ++i)
 			frames[i].consecution->addClause(cls);
-		pic3_share_lemma(&this->sharer, level, cube);
+		if (share) {
+			pic3_share_lemma(&this->sharer, level, cube);
+		}
 		if (toAll && !silent)
 			updateLitOrder(cube, level);
 	}
@@ -965,6 +967,22 @@ class IC3 {
 	}
 
 	friend bool check(Model &, LemmaSharer, int, bool, bool);
+
+	void pic3_acquire_lemma()
+	{
+		while (1) {
+			struct Lemma lemma = sharer.acquire(sharer.data);
+			if (lemma.lits == NULL) {
+				break;
+			}
+			Minisat::Lit *lemma_lits = (Minisat::Lit *)lemma.lits;
+			LitVec lits(lemma_lits, lemma_lits + lemma.num_lit);
+			if (frames.size() > lemma.frame_idx) {
+				addCube(lemma.frame_idx, lits, true, false,
+					false);
+			}
+		}
+	}
 };
 
 // IC3 does not check for 0-step and 1-step reachability, so do it
@@ -1014,5 +1032,4 @@ bool check(Model &model, LemmaSharer sharer, int verbose, bool basic,
 		ic3.printStats();
 	return rv;
 }
-
 }
