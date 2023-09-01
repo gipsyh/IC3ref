@@ -554,6 +554,7 @@ class IC3 {
 			 LitVec *core = NULL, size_t *pred = NULL,
 			 bool orderedCore = false)
 	{
+		pic3_acquire_lemma();
 		Frame &fr = frames[fi];
 		MSLitVec assumps, cls;
 		assumps.capacity(1 + latches.size());
