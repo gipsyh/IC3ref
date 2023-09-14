@@ -14,8 +14,7 @@ struct Pic3Ic3ref {
 
 static void *pic3ic3ref_create()
 {
-	struct Pic3Ic3ref *ic3ref =
-		(struct Pic3Ic3ref *)malloc(sizeof(struct Pic3Ic3ref));
+	struct Pic3Ic3ref *ic3ref = (struct Pic3Ic3ref *)malloc(sizeof(struct Pic3Ic3ref));
 	ic3ref->verbose = 0;
 	return ic3ref;
 }

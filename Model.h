@@ -108,9 +108,8 @@ class Model {
 	// divisions between variable types, constraints, next-state
 	// functions, the error, and the AND table, closely reflecting the
 	// AIGER format.  Easier to use "modelFromAiger()", below.
-	Model(vector<Var> _vars, size_t _inputs, size_t _latches, size_t _reps,
-	      LitVec _init, LitVec _constraints, LitVec _nextStateFns,
-	      Minisat::Lit _err, AigVec _aig)
+	Model(vector<Var> _vars, size_t _inputs, size_t _latches, size_t _reps, LitVec _init, LitVec _constraints,
+	      LitVec _nextStateFns, Minisat::Lit _err, AigVec _aig)
 		: vars(_vars)
 		, inputs(_inputs)
 		, latches(_latches)
@@ -134,8 +133,7 @@ class Model {
 		// same with primed error
 		_primedError = primeLit(_error);
 		// same with primed constraints
-		for (LitVec::const_iterator i = constraints.begin();
-		     i != constraints.end(); ++i)
+		for (LitVec::const_iterator i = constraints.begin(); i != constraints.end(); ++i)
 			primeLit(*i);
 	}
 	~Model();
@@ -172,8 +170,7 @@ class Model {
 	{
 		size_t i = (size_t)var(lit);
 		if (i >= primes && i < primes + reps - inputs)
-			return Minisat::mkLit(
-				(Minisat::Var)(i - primes + inputs), sign(lit));
+			return Minisat::mkLit((Minisat::Var)(i - primes + inputs), sign(lit));
 		else
 			return lit;
 	}
@@ -252,8 +249,7 @@ class Model {
 	// negation of the error are always added --- except that the primed
 	// form of the invariant constraints are not asserted if
 	// !primeConstraints.
-	void loadTransitionRelation(Minisat::Solver &slv,
-				    bool primeConstraints = true);
+	void loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints = true);
 	// Loads the initial condition into the solver.
 	void loadInitialCondition(Minisat::Solver &slv) const;
 	// Loads the error into the solver, which is only necessary for the
