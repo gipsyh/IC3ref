@@ -213,6 +213,7 @@ class IC3 {
     private:
 	int verbose; // 0: silent, 1: stats, 2: all
 	bool random;
+	int random_seed;
 
 	string stringOfLitVec(const LitVec &vec)
 	{
@@ -362,8 +363,8 @@ class IC3 {
 			fr.k = frames.size() - 1;
 			fr.consecution = model.newSolver();
 			if (random) {
-				fr.consecution->random_seed = rand();
-				fr.consecution->rnd_init_act = true;
+				fr.consecution->random_seed = random_seed;
+				// fr.consecution->rnd_init_act = true;
 			}
 			if (fr.k == 0)
 				model.loadInitialCondition(*fr.consecution);
@@ -912,7 +913,7 @@ class IC3 {
 			cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
 	}
 
-	friend bool check(Model &, LemmaSharer, int, bool, bool);
+	friend bool check(Model &, LemmaSharer, int, bool, bool, int);
 
 	void pic3_acquire_lemma()
 	{
@@ -958,7 +959,7 @@ bool baseCases(Model &model)
 }
 
 // External function to make the magic happen.
-bool check(Model &model, LemmaSharer sharer, int verbose, bool basic, bool random)
+bool check(Model &model, LemmaSharer sharer, int verbose, bool basic, bool random, int random_seed)
 {
 	if (!baseCases(model))
 		return false;
@@ -969,8 +970,15 @@ bool check(Model &model, LemmaSharer sharer, int verbose, bool basic, bool rando
 		ic3.maxJoins = 0;
 		ic3.maxCTGs = 0;
 	}
-	if (random)
+	if (random) {
 		ic3.random = true;
+		if (random_seed > 0) {
+			ic3.random_seed = random_seed;
+		} else {
+			ic3.random_seed = rand();
+		}
+		printf("ic3ref random: %d\n", ic3.random_seed);
+	}
 	bool rv = ic3.check();
 	if (!rv && verbose > 1)
 		ic3.printWitness();

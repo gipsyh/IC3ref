@@ -33,7 +33,8 @@ namespace IC3
 bool check(Model &model, LemmaSharer sharer,
 	   int verbose = 0, // 0: silent, 1: stats, 2: informative
 	   bool basic = false, // simple inductive generalization
-	   bool random = false); // random runs for statistical profiling
+	   bool random = false,
+	   int randoms_seed = 0); // random runs for statistical profiling
 }
 
 void pic3_share_lemma(struct LemmaSharer *sharer, int k, LitVec &cube);
