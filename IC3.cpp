@@ -132,11 +132,11 @@ namespace IC3
 
 class IC3 {
     public:
-	IC3(Model &_model, LemmaSharer _sharer)
+	IC3(Model &_model, Synchronizer _synchronizer)
 		: verbose(0)
 		, random(false)
 		, model(_model)
-		, sharer(_sharer)
+		, synchronizer(_synchronizer)
 		, k(1)
 		, nextState(0)
 		, litOrder()
@@ -224,7 +224,7 @@ class IC3 {
 	}
 
 	Model &model;
-	LemmaSharer sharer;
+	Synchronizer synchronizer;
 	size_t k;
 
 	// The State structures are for tracking trees of (lifted) CTIs.
@@ -529,7 +529,7 @@ class IC3 {
 			 bool orderedCore = false, bool pic3_acquire = true)
 	{
 		if (pic3_acquire) {
-			pic3_acquire_lemma();
+			pic3_handle_message();
 		}
 		Frame &fr = frames[fi];
 		MSLitVec assumps, cls;
@@ -729,7 +729,7 @@ class IC3 {
 		for (size_t i = toAll ? 1 : level; i <= level; ++i)
 			frames[i].consecution->addClause(cls);
 		if (share) {
-			pic3_share_lemma(&this->sharer, level, cube);
+			pic3_share_lemma(&this->synchronizer, level, cube);
 		}
 		if (toAll && !silent)
 			updateLitOrder(cube, level);
@@ -913,21 +913,25 @@ class IC3 {
 			cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
 	}
 
-	friend bool check(Model &, LemmaSharer, int, bool, bool, int);
+	friend bool check(Model &, Synchronizer, int, bool, bool, int);
 
-	void pic3_acquire_lemma()
+	void pic3_handle_message()
 	{
 		while (1) {
-			struct Lemma lemma = sharer.acquire(sharer.data, frames.size() - 1);
-			if (lemma.lits == NULL) {
+			struct Message *message = synchronizer.receive_message(synchronizer.data);
+			if (message == NULL) {
 				break;
 			}
-			Minisat::Lit *lemma_lits = (Minisat::Lit *)lemma.lits;
-			LitVec lits(lemma_lits, lemma_lits + lemma.num_lit);
-			if (frames.size() > lemma.frame_idx) {
-				addCube(lemma.frame_idx, lits, true, false, false);
-			} else {
-				std::terminate();
+			if (message->type == Message::Lemma) {
+				Lemma lemma = message->lemma;
+				Minisat::Lit *lemma_lits = (Minisat::Lit *)lemma.lits;
+				LitVec lits(lemma_lits, lemma_lits + lemma.num_lit);
+				if (frames.size() > lemma.frame_idx) {
+					addCube(lemma.frame_idx, lits, true, false, false);
+				} else {
+					std::terminate();
+				}
+			} else if (message->type == Message::FrameBlocked) {
 			}
 		}
 	}
@@ -959,11 +963,11 @@ bool baseCases(Model &model)
 }
 
 // External function to make the magic happen.
-bool check(Model &model, LemmaSharer sharer, int verbose, bool basic, bool random, int random_seed)
+bool check(Model &model, Synchronizer synchronizer, int verbose, bool basic, bool random, int random_seed)
 {
 	if (!baseCases(model))
 		return false;
-	IC3 ic3(model, sharer);
+	IC3 ic3(model, synchronizer);
 	ic3.verbose = verbose;
 	if (basic) {
 		ic3.maxDepth = 0;

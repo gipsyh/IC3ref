@@ -10,7 +10,7 @@ static aiger *aig;
 struct Pic3Ic3ref {
 	int verbose;
 	int random_seed;
-	struct LemmaSharer sharer;
+	struct Synchronizer synchronizer;
 };
 
 static void *pic3ic3ref_create()
@@ -31,10 +31,10 @@ static void pic3ic3ref_set_model(void *t, char *model)
 	}
 }
 
-static void pic3ic3ref_set_lemma_sharer(void *t, struct LemmaSharer sharer)
+static void pic3ic3ref_set_synchronizer(void *t, struct Synchronizer synchronizer)
 {
 	struct Pic3Ic3ref *p = (struct Pic3Ic3ref *)t;
-	p->sharer = sharer;
+	p->synchronizer = synchronizer;
 }
 
 static void pic3ic3ref_set_random_seed(void *t, int random)
@@ -55,19 +55,19 @@ static int pic3ic3ref_solve(void *t)
 {
 	struct Pic3Ic3ref *p = (struct Pic3Ic3ref *)t;
 	Model *model = modelFromAiger(aig, 0);
-	return IC3::check(*model, p->sharer, p->verbose, false, true, p->random_seed);
+	return IC3::check(*model, p->synchronizer, p->verbose, false, true, p->random_seed);
 }
 
 struct Pic3Interface pic3ic3ref = {
 	.create = pic3ic3ref_create,
 	.set_model = pic3ic3ref_set_model,
-	.set_lemma_sharer = pic3ic3ref_set_lemma_sharer,
+	.set_synchronizer = pic3ic3ref_set_synchronizer,
 	.set_random_seed = pic3ic3ref_set_random_seed,
 	.diversify = pic3ic3ref_diversify,
 	.solve = pic3ic3ref_solve,
 };
 
-void pic3_share_lemma(struct LemmaSharer *sharer, int k, LitVec &cube)
+void pic3_share_lemma(struct Synchronizer *synchronizer, int k, LitVec &cube)
 {
 	int *lits = (int *)malloc(sizeof(int) * cube.size());
 	for (int i = 0; i < cube.size(); i++) {
@@ -78,5 +78,5 @@ void pic3_share_lemma(struct LemmaSharer *sharer, int k, LitVec &cube)
 		.lits = lits,
 		.num_lit = cube.size(),
 	};
-	(sharer->share)(sharer->data, lemma);
+	(synchronizer->share_lemma)(synchronizer->data, lemma);
 }
