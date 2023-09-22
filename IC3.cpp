@@ -184,12 +184,15 @@ class IC3 {
 	bool check()
 	{
 		startTime = time(); // stats
+		synchronizer.sync(synchronizer.data);
+		synchronizer.sync(synchronizer.data);
 		while (true) {
 			if (verbose > 1)
 				cout << "Level " << k << endl;
 			extend(); // push frontier frame
 			if (!strengthen())
 				return false; // strengthen to remove bad successors
+			synchronizer.sync(synchronizer.data);
 			if (propagate())
 				return true; // propagate clauses; check for proof
 			printStats();
@@ -791,6 +794,7 @@ class IC3 {
 		earliest = k + 1; // earliest frame with enlarged borderCubes
 		while (true) {
 			++nQuery;
+			pic3_handle_message();
 			startTimer(); // stats
 			bool rv = frontier.consecution->solve(model.primedError());
 			endTimer(satTime);
