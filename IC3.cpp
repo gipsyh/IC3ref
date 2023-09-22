@@ -603,6 +603,7 @@ class IC3 {
 				}
 				return rv;
 			}
+			std::terminate();
 			// prepare to obtain CTG
 			size_t cubeState = newState();
 			state(cubeState).successor = 0;
@@ -658,6 +659,52 @@ class IC3 {
 		}
 	}
 
+	bool double_drop_down(size_t level, LitVec &cube, Minisat::Lit first, Minisat::Lit second, int *fail)
+	{
+		if (!initiation(cube)) {
+			cube.push_back(second);
+			if (!initiation(cube)) {
+				*fail = 1;
+			} else {
+				*fail = 2;
+			}
+			cube.pop_back();
+			return false;
+		}
+		LitVec core;
+		Minisat::Lit next_first = model.primeLit(first);
+		Minisat::Lit next_second = model.primeLit(second);
+		frames[level].consecution->setPolarity(Minisat::var(next_first),
+						       Minisat::lbool(!Minisat::sign(next_first)));
+		frames[level].consecution->setPolarity(Minisat::var(next_second),
+						       Minisat::lbool(!Minisat::sign(next_second)));
+		bool rv = consecution(level, cube, 0, &core, NULL, true);
+		if (rv) {
+			if (core.size() < cube.size()) {
+				cube = core;
+			}
+		} else {
+			Minisat::lbool next_first_model = frames[level].consecution->modelValue(next_first);
+			Minisat::lbool next_second_model = frames[level].consecution->modelValue(next_second);
+			if (next_first_model == Minisat::l_Undef || next_second_model == Minisat::l_Undef) {
+				std::terminate();
+			}
+			if (next_first_model == Minisat::l_True && next_second_model == Minisat::l_True) {
+				std::terminate();
+			}
+			if (next_first_model == Minisat::l_True && next_second_model == Minisat::l_False) {
+				*fail = 2;
+			}
+			if (next_first_model == Minisat::l_False && next_second_model == Minisat::l_True) {
+				*fail = 1;
+			}
+			if (next_first_model == Minisat::l_False && next_second_model == Minisat::l_False) {
+				*fail = 0;
+			}
+		}
+		return rv;
+	}
+
 	// Extracts minimal inductive (relative to level) subclause from
 	// ~cube --- at least that's where the name comes from.  With
 	// ctgDown, it's not quite a MIC anymore, but what's returned is
@@ -702,6 +749,64 @@ class IC3 {
 		mic(level, cube, 1);
 	}
 
+	void double_drop_mic(size_t level, LitVec &cube)
+	{
+		orderCube(cube);
+		for (size_t i = 0; i < cube.size();) {
+			if (i + 1 < cube.size()) {
+				Minisat::Lit first = cube[i];
+				Minisat::Lit second = cube[i + 1];
+				LitVec cp(cube.begin(), cube.begin() + i);
+				cp.insert(cp.end(), cube.begin() + i + 2, cube.end());
+				int fail = 3;
+				if (double_drop_down(level, cp, first, second, &fail)) {
+					LitSet lits(cp.begin(), cp.end());
+					LitVec tmp;
+					for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
+						if (lits.find(*j) != lits.end())
+							tmp.push_back(*j);
+					cube.swap(tmp);
+				} else {
+					if (fail == 0) {
+						LitVec cp(cube.begin(), cube.begin() + i);
+						cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
+						if (ctgDown(level, cp, i, 1)) {
+							LitSet lits(cp.begin(), cp.end());
+							LitVec tmp;
+							for (LitVec::const_iterator j = cube.begin(); j != cube.end();
+							     ++j)
+								if (lits.find(*j) != lits.end())
+									tmp.push_back(*j);
+							cube.swap(tmp);
+						} else {
+							++i;
+						}
+					} else if (fail == 1) {
+						++i;
+					} else if (fail == 2) {
+						swap(cube[i], cube[i + 1]);
+						++i;
+					} else {
+						std::terminate();
+					}
+				}
+			} else {
+				LitVec cp(cube.begin(), cube.begin() + i);
+				cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
+				if (ctgDown(level, cp, i, 1)) {
+					LitSet lits(cp.begin(), cp.end());
+					LitVec tmp;
+					for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
+						if (lits.find(*j) != lits.end())
+							tmp.push_back(*j);
+					cube.swap(tmp);
+				} else {
+					++i;
+				}
+			}
+		}
+	}
+
 	size_t earliest; // track earliest modified level in a major iteration
 
 	// Adds cube to frames at and below level, unless !toAll, in which
@@ -730,7 +835,8 @@ class IC3 {
 	size_t generalize(size_t level, LitVec cube)
 	{
 		// generalize
-		mic(level, cube);
+		// mic(level, cube);
+		double_drop_mic(level, cube);
 		// push
 		do {
 			++level;
