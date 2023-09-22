@@ -165,16 +165,14 @@ class IC3 {
 		notInvConstraints = Minisat::mkLit(lifts->newVar());
 		Minisat::vec<Minisat::Lit> cls;
 		cls.push(~notInvConstraints);
-		for (LitVec::const_iterator i =
-			     model.invariantConstraints().begin();
+		for (LitVec::const_iterator i = model.invariantConstraints().begin();
 		     i != model.invariantConstraints().end(); ++i)
 			cls.push(model.primeLit(~*i));
 		lifts->addClause_(cls);
 	}
 	~IC3()
 	{
-		for (vector<Frame>::const_iterator i = frames.begin();
-		     i != frames.end(); ++i)
+		for (vector<Frame>::const_iterator i = frames.begin(); i != frames.end(); ++i)
 			if (i->consecution)
 				delete i->consecution;
 		delete lifts;
@@ -203,8 +201,7 @@ class IC3 {
 		if (cexState != 0) {
 			size_t curr = cexState;
 			while (curr) {
-				cout << stringOfLitVec(state(curr).inputs)
-				     << stringOfLitVec(state(curr).latches)
+				cout << stringOfLitVec(state(curr).inputs) << stringOfLitVec(state(curr).latches)
 				     << endl;
 				curr = state(curr).successor;
 			}
@@ -218,8 +215,7 @@ class IC3 {
 	string stringOfLitVec(const LitVec &vec)
 	{
 		stringstream ss;
-		for (LitVec::const_iterator i = vec.begin(); i != vec.end();
-		     ++i)
+		for (LitVec::const_iterator i = vec.begin(); i != vec.end(); ++i)
 			ss << model.stringOfLit(*i) << " ";
 		return ss.str();
 	}
@@ -270,8 +266,7 @@ class IC3 {
 	}
 	void resetStates()
 	{
-		for (vector<State>::iterator i = states.begin();
-		     i != states.end(); ++i) {
+		for (vector<State>::iterator i = states.begin(); i != states.end(); ++i) {
 			i->used = false;
 			i->latches.clear();
 			i->inputs.clear();
@@ -389,15 +384,12 @@ class IC3 {
 		{
 			assert(!cube.empty());
 			// assumes cube is ordered
-			size_t sz = (size_t)Minisat::toInt(
-				Minisat::var(cube.back()));
+			size_t sz = (size_t)Minisat::toInt(Minisat::var(cube.back()));
 			if (sz >= counts.size())
 				counts.resize(sz + 1);
 			_mini = (size_t)Minisat::toInt(Minisat::var(cube[0]));
-			for (LitVec::const_iterator i = cube.begin();
-			     i != cube.end(); ++i)
-				counts[(size_t)Minisat::toInt(
-					Minisat::var(*i))] += 1;
+			for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
+				counts[(size_t)Minisat::toInt(Minisat::var(*i))] += 1;
 		}
 		void decay()
 		{
@@ -413,8 +405,7 @@ class IC3 {
 		{
 		}
 
-		bool operator()(const Minisat::Lit &l1,
-				const Minisat::Lit &l2) const
+		bool operator()(const Minisat::Lit &l1, const Minisat::Lit &l2) const
 		{
 			// l1, l2 must be unprimed
 			size_t i2 = (size_t)Minisat::toInt(Minisat::var(l2));
@@ -423,8 +414,7 @@ class IC3 {
 			size_t i1 = (size_t)Minisat::toInt(Minisat::var(l1));
 			if (i1 >= heuristicLitOrder->counts.size())
 				return true;
-			return (heuristicLitOrder->counts[i1] <
-				heuristicLitOrder->counts[i2]);
+			return (heuristicLitOrder->counts[i1] < heuristicLitOrder->counts[i2]);
 		}
 	} slimLitOrder;
 
@@ -462,56 +452,42 @@ class IC3 {
 		size_t st = newState();
 		state(st).successor = succ;
 		MSLitVec assumps;
-		assumps.capacity(1 +
-				 2 * (model.endInputs() - model.beginInputs()) +
+		assumps.capacity(1 + 2 * (model.endInputs() - model.beginInputs()) +
 				 (model.endLatches() - model.beginLatches()));
-		Minisat::Lit act =
-			Minisat::mkLit(lifts->newVar()); // activation literal
+		Minisat::Lit act = Minisat::mkLit(lifts->newVar()); // activation literal
 		assumps.push(act);
 		Minisat::vec<Minisat::Lit> cls;
 		cls.push(~act);
-		cls.push(
-			notInvConstraints); // successor must satisfy inv. constraint
+		cls.push(notInvConstraints); // successor must satisfy inv. constraint
 		if (succ == 0)
 			cls.push(~model.primedError());
 		else
-			for (LitVec::const_iterator i =
-				     state(succ).latches.begin();
-			     i != state(succ).latches.end(); ++i)
+			for (LitVec::const_iterator i = state(succ).latches.begin(); i != state(succ).latches.end();
+			     ++i)
 				cls.push(model.primeLit(~*i));
 		lifts->addClause_(cls);
 		// extract and assert primary inputs
-		for (VarVec::const_iterator i = model.beginInputs();
-		     i != model.endInputs(); ++i) {
-			Minisat::lbool val =
-				fr.consecution->modelValue(i->var());
+		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
+			Minisat::lbool val = fr.consecution->modelValue(i->var());
 			if (val != Minisat::l_Undef) {
-				Minisat::Lit pi =
-					i->lit(val == Minisat::l_False);
-				state(st).inputs.push_back(
-					pi); // record full inputs
+				Minisat::Lit pi = i->lit(val == Minisat::l_False);
+				state(st).inputs.push_back(pi); // record full inputs
 				assumps.push(pi);
 			}
 		}
 		// some properties include inputs, so assert primed inputs after
-		for (VarVec::const_iterator i = model.beginInputs();
-		     i != model.endInputs(); ++i) {
-			Minisat::lbool pval = fr.consecution->modelValue(
-				model.primeVar(*i).var());
+		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
+			Minisat::lbool pval = fr.consecution->modelValue(model.primeVar(*i).var());
 			if (pval != Minisat::l_Undef)
-				assumps.push(model.primeLit(
-					i->lit(pval == Minisat::l_False)));
+				assumps.push(model.primeLit(i->lit(pval == Minisat::l_False)));
 		}
 		int sz = assumps.size();
 		// extract and assert latches
 		LitVec latches;
-		for (VarVec::const_iterator i = model.beginLatches();
-		     i != model.endLatches(); ++i) {
-			Minisat::lbool val =
-				fr.consecution->modelValue(i->var());
+		for (VarVec::const_iterator i = model.beginLatches(); i != model.endLatches(); ++i) {
+			Minisat::lbool val = fr.consecution->modelValue(i->var());
 			if (val != Minisat::l_Undef) {
-				Minisat::Lit la =
-					i->lit(val == Minisat::l_False);
+				Minisat::Lit la = i->lit(val == Minisat::l_False);
 				latches.push_back(la);
 				assumps.push(la);
 			}
@@ -527,11 +503,9 @@ class IC3 {
 		endTimer(satTime);
 		assert(!rv);
 		// obtain lifted latch set from unsat core
-		for (LitVec::const_iterator i = latches.begin();
-		     i != latches.end(); ++i)
+		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
 			if (lifts->conflict.has(~*i))
-				state(st).latches.push_back(
-					*i); // record lifted latches
+				state(st).latches.push_back(*i); // record lifted latches
 		// deactivate negation of successor
 		lifts->releaseVar(~act);
 		return st;
@@ -547,8 +521,7 @@ class IC3 {
 	// inductive and core is provided, extracts the unsat core.  If
 	// it's not inductive and pred is provided, extracts
 	// predecessor(s).
-	bool consecution(size_t fi, const LitVec &latches, size_t succ = 0,
-			 LitVec *core = NULL, size_t *pred = NULL,
+	bool consecution(size_t fi, const LitVec &latches, size_t succ = 0, LitVec *core = NULL, size_t *pred = NULL,
 			 bool orderedCore = false)
 	{
 		Frame &fr = frames[fi];
@@ -558,8 +531,7 @@ class IC3 {
 		Minisat::Lit act = Minisat::mkLit(fr.consecution->newVar());
 		assumps.push(act);
 		cls.push(~act);
-		for (LitVec::const_iterator i = latches.begin();
-		     i != latches.end(); ++i) {
+		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i) {
 			cls.push(~*i);
 			assumps.push(*i); // push unprimed...
 		}
@@ -595,10 +567,8 @@ class IC3 {
 				assert(!rv);
 				endTimer(satTime);
 			}
-			for (LitVec::const_iterator i = latches.begin();
-			     i != latches.end(); ++i)
-				if (fr.consecution->conflict.has(
-					    ~model.primeLit(*i)))
+			for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
+				if (fr.consecution->conflict.has(~model.primeLit(*i)))
 					core->push_back(*i);
 			if (!initiation(*core))
 				*core = latches;
@@ -626,8 +596,7 @@ class IC3 {
 			if (recDepth > maxDepth) {
 				// quick check if recursion depth is exceeded
 				LitVec core;
-				bool rv = consecution(level, cube, 0, &core,
-						      NULL, true);
+				bool rv = consecution(level, cube, 0, &core, NULL, true);
 				if (rv && core.size() < cube.size()) {
 					++nCoreReduced; // stats
 					cube = core;
@@ -640,8 +609,7 @@ class IC3 {
 			state(cubeState).latches = cube;
 			size_t ctg;
 			LitVec core;
-			if (consecution(level, cube, cubeState, &core, &ctg,
-					true)) {
+			if (consecution(level, cube, cubeState, &core, &ctg, true)) {
 				if (core.size() < cube.size()) {
 					++nCoreReduced; // stats
 					cube = core;
@@ -653,10 +621,8 @@ class IC3 {
 			// not inductive, address interfering CTG
 			LitVec ctgCore;
 			bool ret = false;
-			if (ctgs < maxCTGs && level > 1 &&
-			    initiation(state(ctg).latches) &&
-			    consecution(level - 1, state(ctg).latches,
-					cubeState, &ctgCore)) {
+			if (ctgs < maxCTGs && level > 1 && initiation(state(ctg).latches) &&
+			    consecution(level - 1, state(ctg).latches, cubeState, &ctgCore)) {
 				// CTG is inductive relative to level-1; push forward and generalize
 				++nCTG; // stats
 				++ctgs;
@@ -672,10 +638,8 @@ class IC3 {
 				++joins;
 				LitVec tmp;
 				for (size_t i = 0; i < cube.size(); ++i)
-					if (binary_search(
-						    state(ctg).latches.begin(),
-						    state(ctg).latches.end(),
-						    cube[i]))
+					if (binary_search(state(ctg).latches.begin(), state(ctg).latches.end(),
+							  cube[i]))
 						tmp.push_back(cube[i]);
 					else if (i < keepTo) {
 						// previously failed when this literal was dropped
@@ -711,8 +675,7 @@ class IC3 {
 				// maintain original order
 				LitSet lits(cp.begin(), cp.end());
 				LitVec tmp;
-				for (LitVec::const_iterator j = cube.begin();
-				     j != cube.end(); ++j)
+				for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
 					if (lits.find(*j) != lits.end())
 						tmp.push_back(*j);
 				cube.swap(tmp);
@@ -743,12 +706,10 @@ class IC3 {
 
 	// Adds cube to frames at and below level, unless !toAll, in which
 	// case only to level.
-	void addCube(size_t level, LitVec &cube, bool toAll = true,
-		     bool silent = false)
+	void addCube(size_t level, LitVec &cube, bool toAll = true, bool silent = false)
 	{
 		sort(cube.begin(), cube.end());
-		pair<CubeSet::iterator, bool> rv =
-			frames[level].borderCubes.insert(cube);
+		pair<CubeSet::iterator, bool> rv = frames[level].borderCubes.insert(cube);
 		if (!rv.second)
 			return;
 		if (!silent && verbose > 1)
@@ -756,8 +717,7 @@ class IC3 {
 		earliest = min(earliest, level);
 		MSLitVec cls;
 		cls.capacity(cube.size());
-		for (LitVec::const_iterator i = cube.begin(); i != cube.end();
-		     ++i)
+		for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
 			cls.push(~*i);
 		for (size_t i = toAll ? 1 : level; i <= level; ++i)
 			frames[i].consecution->addClause(cls);
@@ -790,15 +750,13 @@ class IC3 {
 			LitVec core;
 			size_t predi;
 			// Is the obligation fulfilled?
-			if (consecution(obl.level, state(obl.state).latches,
-					obl.state, &core, &predi)) {
+			if (consecution(obl.level, state(obl.state).latches, obl.state, &core, &predi)) {
 				// Yes, so generalize and possibly produce a new obligation
 				// at a higher level.
 				obls.erase(obli);
 				size_t n = generalize(obl.level, core);
 				if (n <= k)
-					obls.insert(Obligation(obl.state, n,
-							       obl.depth));
+					obls.insert(Obligation(obl.state, n, obl.depth));
 			} else if (obl.level == 0) {
 				// No, in fact an initial state is a predecessor.
 				cexState = predi;
@@ -806,8 +764,7 @@ class IC3 {
 			} else {
 				++nCTI; // stats
 				// No, so focus on predecessor.
-				obls.insert(Obligation(predi, obl.level - 1,
-						       obl.depth + 1));
+				obls.insert(Obligation(predi, obl.level - 1, obl.depth + 1));
 			}
 		}
 		return true;
@@ -825,8 +782,7 @@ class IC3 {
 		while (true) {
 			++nQuery;
 			startTimer(); // stats
-			bool rv = frontier.consecution->solve(
-				model.primedError());
+			bool rv = frontier.consecution->solve(model.primedError());
 			endTimer(satTime);
 			if (!rv)
 				return true;
@@ -857,20 +813,15 @@ class IC3 {
 		for (size_t i = k + 1; i >= earliest; --i) {
 			Frame &fr = frames[i];
 			CubeSet rem, nall;
-			set_difference(fr.borderCubes.begin(),
-				       fr.borderCubes.end(), all.begin(),
-				       all.end(), inserter(rem, rem.end()),
-				       LitVecComp());
+			set_difference(fr.borderCubes.begin(), fr.borderCubes.end(), all.begin(), all.end(),
+				       inserter(rem, rem.end()), LitVecComp());
 			if (verbose > 1)
-				cout << i << " " << fr.borderCubes.size() << " "
-				     << rem.size() << " ";
+				cout << i << " " << fr.borderCubes.size() << " " << rem.size() << " ";
 			fr.borderCubes.swap(rem);
-			set_union(rem.begin(), rem.end(), all.begin(),
-				  all.end(), inserter(nall, nall.end()),
+			set_union(rem.begin(), rem.end(), all.begin(), all.end(), inserter(nall, nall.end()),
 				  LitVecComp());
 			all.swap(nall);
-			for (CubeSet::const_iterator i = fr.borderCubes.begin();
-			     i != fr.borderCubes.end(); ++i)
+			for (CubeSet::const_iterator i = fr.borderCubes.begin(); i != fr.borderCubes.end(); ++i)
 				assert(all.find(*i) != all.end());
 			if (verbose > 1)
 				cout << all.size() << endl;
@@ -879,14 +830,12 @@ class IC3 {
 		for (size_t i = trivial ? k : 1; i <= k; ++i) {
 			int ckeep = 0, cprop = 0, cdrop = 0;
 			Frame &fr = frames[i];
-			for (CubeSet::iterator j = fr.borderCubes.begin();
-			     j != fr.borderCubes.end();) {
+			for (CubeSet::iterator j = fr.borderCubes.begin(); j != fr.borderCubes.end();) {
 				LitVec core;
 				if (consecution(i, *j, 0, &core)) {
 					++cprop;
 					// only add to frame i+1 unless the core is reduced
-					addCube(i + 1, core,
-						core.size() < j->size(), true);
+					addCube(i + 1, core, core.size() < j->size(), true);
 					CubeSet::iterator tmp = j;
 					++j;
 					fr.borderCubes.erase(tmp);
@@ -896,8 +845,7 @@ class IC3 {
 				}
 			}
 			if (verbose > 1)
-				cout << i << " " << ckeep << " " << cprop << " "
-				     << cdrop << endl;
+				cout << i << " " << ckeep << " " << cprop << " " << cdrop << endl;
 			if (fr.borderCubes.empty())
 				return true;
 		}
@@ -931,33 +879,23 @@ class IC3 {
 		if (!verbose)
 			return;
 		clock_t etime = time();
-		cout << ". Elapsed time: "
-		     << ((double)etime / sysconf(_SC_CLK_TCK)) << endl;
+		cout << ". Elapsed time: " << ((double)etime / sysconf(_SC_CLK_TCK)) << endl;
 		etime -= startTime;
 		if (!etime)
 			etime = 1;
-		cout << ". % SAT:        "
-		     << (int)(100 * (((double)satTime) / ((double)etime)))
-		     << endl;
+		cout << ". % SAT:        " << (int)(100 * (((double)satTime) / ((double)etime))) << endl;
 		cout << ". K:            " << k << endl;
 		cout << ". # Queries:    " << nQuery << endl;
 		cout << ". # CTIs:       " << nCTI << endl;
 		cout << ". # CTGs:       " << nCTG << endl;
 		cout << ". # mic calls:  " << nmic << endl;
-		cout << ". Queries/sec:  "
-		     << (int)(((double)nQuery) / ((double)etime) *
-			      sysconf(_SC_CLK_TCK))
-		     << endl;
-		cout << ". Mics/sec:     "
-		     << (int)(((double)nmic) / ((double)etime) *
-			      sysconf(_SC_CLK_TCK))
-		     << endl;
+		cout << ". Queries/sec:  " << (int)(((double)nQuery) / ((double)etime) * sysconf(_SC_CLK_TCK)) << endl;
+		cout << ". Mics/sec:     " << (int)(((double)nmic) / ((double)etime) * sysconf(_SC_CLK_TCK)) << endl;
 		cout << ". # Red. cores: " << nCoreReduced << endl;
 		cout << ". # Int. joins: " << nAbortJoin << endl;
 		cout << ". # Int. mics:  " << nAbortMic << endl;
 		if (numUpdates)
-			cout << ". Avg lits/cls: " << numLits / numUpdates
-			     << endl;
+			cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
 	}
 
 	friend bool check(Model &, int, bool, bool);

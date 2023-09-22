@@ -91,28 +91,24 @@ void Model::loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints)
 			assert(nv == vars[i].var());
 		}
 		// freeze inputs, latches, and special nodes (and primed forms)
-		for (VarVec::const_iterator i = beginInputs(); i != endInputs();
-		     ++i) {
+		for (VarVec::const_iterator i = beginInputs(); i != endInputs(); ++i) {
 			sslv->setFrozen(i->var(), true);
 			sslv->setFrozen(primeVar(*i).var(), true);
 		}
-		for (VarVec::const_iterator i = beginLatches();
-		     i != endLatches(); ++i) {
+		for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
 			sslv->setFrozen(i->var(), true);
 			sslv->setFrozen(primeVar(*i).var(), true);
 		}
 		sslv->setFrozen(varOfLit(error()).var(), true);
 		sslv->setFrozen(varOfLit(primedError()).var(), true);
-		for (LitVec::const_iterator i = constraints.begin();
-		     i != constraints.end(); ++i) {
+		for (LitVec::const_iterator i = constraints.begin(); i != constraints.end(); ++i) {
 			Var v = varOfLit(*i);
 			sslv->setFrozen(v.var(), true);
 			sslv->setFrozen(primeVar(v).var(), true);
 		}
 		// initialize with roots of required formulas
 		LitSet require; // unprimed formulas
-		for (VarVec::const_iterator i = beginLatches();
-		     i != endLatches(); ++i)
+		for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i)
 			require.insert(nextStateFn(*i));
 		require.insert(_error);
 		require.insert(constraints.begin(), constraints.end());
@@ -120,11 +116,9 @@ void Model::loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints)
 		prequire.insert(_error);
 		prequire.insert(constraints.begin(), constraints.end());
 		// traverse AIG backward
-		for (AigVec::const_reverse_iterator i = aig.rbegin();
-		     i != aig.rend(); ++i) {
+		for (AigVec::const_reverse_iterator i = aig.rbegin(); i != aig.rend(); ++i) {
 			// skip if this row is not required
-			if (require.find(i->lhs) == require.end() &&
-			    require.find(~i->lhs) == require.end())
+			if (require.find(i->lhs) == require.end() && require.find(~i->lhs) == require.end())
 				continue;
 			// encode into CNF
 			sslv->addClause(~i->lhs, i->rhs0);
@@ -134,12 +128,10 @@ void Model::loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints)
 			require.insert(i->rhs0);
 			require.insert(i->rhs1);
 			// primed: skip if not required
-			if (prequire.find(i->lhs) == prequire.end() &&
-			    prequire.find(~i->lhs) == prequire.end())
+			if (prequire.find(i->lhs) == prequire.end() && prequire.find(~i->lhs) == prequire.end())
 				continue;
 			// encode PRIMED form into CNF
-			Minisat::Lit r0 = primeLit(i->lhs, sslv),
-				     r1 = primeLit(i->rhs0, sslv),
+			Minisat::Lit r0 = primeLit(i->lhs, sslv), r1 = primeLit(i->rhs0, sslv),
 				     r2 = primeLit(i->rhs1, sslv);
 			sslv->addClause(~r0, r1);
 			sslv->addClause(~r0, r2);
@@ -152,15 +144,12 @@ void Model::loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints)
 		sslv->addClause(btrue());
 		// assert ~error, constraints, and primed constraints
 		sslv->addClause(~_error);
-		for (LitVec::const_iterator i = constraints.begin();
-		     i != constraints.end(); ++i) {
+		for (LitVec::const_iterator i = constraints.begin(); i != constraints.end(); ++i) {
 			sslv->addClause(*i);
 		}
 		// assert l' = f for each latch l
-		for (VarVec::const_iterator i = beginLatches();
-		     i != endLatches(); ++i) {
-			Minisat::Lit platch = primeLit(i->lit(false)),
-				     f = nextStateFn(*i);
+		for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
+			Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
 			sslv->addClause(~platch, f);
 			sslv->addClause(~f, platch);
 		}
@@ -169,20 +158,17 @@ void Model::loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints)
 	// load the clauses from the simplified context
 	while (slv.nVars() < sslv->nVars())
 		slv.newVar();
-	for (Minisat::ClauseIterator c = sslv->clausesBegin();
-	     c != sslv->clausesEnd(); ++c) {
+	for (Minisat::ClauseIterator c = sslv->clausesBegin(); c != sslv->clausesEnd(); ++c) {
 		const Minisat::Clause &cls = *c;
 		Minisat::vec<Minisat::Lit> cls_;
 		for (int i = 0; i < cls.size(); ++i)
 			cls_.push(cls[i]);
 		slv.addClause_(cls_);
 	}
-	for (Minisat::TrailIterator c = sslv->trailBegin();
-	     c != sslv->trailEnd(); ++c)
+	for (Minisat::TrailIterator c = sslv->trailBegin(); c != sslv->trailEnd(); ++c)
 		slv.addClause(*c);
 	if (primeConstraints)
-		for (LitVec::const_iterator i = constraints.begin();
-		     i != constraints.end(); ++i)
+		for (LitVec::const_iterator i = constraints.begin(); i != constraints.end(); ++i)
 			slv.addClause(primeLit(*i));
 }
 
@@ -196,11 +182,9 @@ void Model::loadInitialCondition(Minisat::Solver &slv) const
 	// impose invariant constraints on initial states (AIGER 1.9)
 	LitSet require;
 	require.insert(constraints.begin(), constraints.end());
-	for (AigVec::const_reverse_iterator i = aig.rbegin(); i != aig.rend();
-	     ++i) {
+	for (AigVec::const_reverse_iterator i = aig.rbegin(); i != aig.rend(); ++i) {
 		// skip if this (*i) is not required
-		if (require.find(i->lhs) == require.end() &&
-		    require.find(~i->lhs) == require.end())
+		if (require.find(i->lhs) == require.end() && require.find(~i->lhs) == require.end())
 			continue;
 		// encode into CNF
 		slv.addClause(~i->lhs, i->rhs0);
@@ -210,8 +194,7 @@ void Model::loadInitialCondition(Minisat::Solver &slv) const
 		require.insert(i->rhs0);
 		require.insert(i->rhs1);
 	}
-	for (LitVec::const_iterator i = constraints.begin();
-	     i != constraints.end(); ++i)
+	for (LitVec::const_iterator i = constraints.begin(); i != constraints.end(); ++i)
 		slv.addClause(*i);
 }
 
@@ -220,11 +203,9 @@ void Model::loadError(Minisat::Solver &slv) const
 	LitSet require; // unprimed formulas
 	require.insert(_error);
 	// traverse AIG backward
-	for (AigVec::const_reverse_iterator i = aig.rbegin(); i != aig.rend();
-	     ++i) {
+	for (AigVec::const_reverse_iterator i = aig.rbegin(); i != aig.rend(); ++i) {
 		// skip if this row is not required
-		if (require.find(i->lhs) == require.end() &&
-		    require.find(~i->lhs) == require.end())
+		if (require.find(i->lhs) == require.end() && require.find(~i->lhs) == require.end())
 			continue;
 		// encode into CNF
 		slv.addClause(~i->lhs, i->rhs0);
@@ -242,8 +223,7 @@ bool Model::isInitial(const LitVec &latches)
 		// an intersection check (AIGER 1.9 w/o invariant constraints)
 		if (initLits.empty())
 			initLits.insert(init.begin(), init.end());
-		for (LitVec::const_iterator i = latches.begin();
-		     i != latches.end(); ++i)
+		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
 			if (initLits.find(~*i) != initLits.end())
 				return false;
 		return true;
@@ -255,16 +235,14 @@ bool Model::isInitial(const LitVec &latches)
 		}
 		Minisat::vec<Minisat::Lit> assumps;
 		assumps.capacity(latches.size());
-		for (LitVec::const_iterator i = latches.begin();
-		     i != latches.end(); ++i)
+		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
 			assumps.push(*i);
 		return inits->solve(assumps);
 	}
 }
 
 // Creates a named variable.
-Var var(const aiger_symbol *syms, size_t i, const char prefix,
-	bool prime = false)
+Var var(const aiger_symbol *syms, size_t i, const char prefix, bool prime = false)
 {
 	const aiger_symbol &sym = syms[i];
 	stringstream ss;
@@ -329,12 +307,10 @@ Model *modelFromAiger(aiger *aig, unsigned int propertyIndex)
 		cout << "Bad property index specified." << endl;
 		return 0;
 	}
-	Minisat::Lit err = aig->num_bad > 0 ?
-				   lit(vars, aig->bad[propertyIndex].lit) :
-				   lit(vars, aig->outputs[propertyIndex].lit);
+	Minisat::Lit err =
+		aig->num_bad > 0 ? lit(vars, aig->bad[propertyIndex].lit) : lit(vars, aig->outputs[propertyIndex].lit);
 
 	size_t offset = 0;
-	return new Model(vars, offset += 1, offset += aig->num_inputs,
-			 offset + aig->num_latches, init, constraints,
+	return new Model(vars, offset += 1, offset += aig->num_inputs, offset + aig->num_latches, init, constraints,
 			 nextStateFns, err, aigv);
 }
