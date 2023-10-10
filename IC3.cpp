@@ -674,10 +674,10 @@ class IC3 {
 		LitVec core;
 		Minisat::Lit next_first = model.primeLit(first);
 		Minisat::Lit next_second = model.primeLit(second);
-		frames[level].consecution->setPolarity(Minisat::var(next_first),
-						       Minisat::lbool(!Minisat::sign(next_first)));
-		frames[level].consecution->setPolarity(Minisat::var(next_second),
-						       Minisat::lbool(!Minisat::sign(next_second)));
+		// frames[level].consecution->setPolarity(Minisat::var(next_first),
+		// 				       Minisat::lbool(!Minisat::sign(next_first)));
+		// frames[level].consecution->setPolarity(Minisat::var(next_second),
+		// 				       Minisat::lbool(!Minisat::sign(next_second)));
 		bool rv = consecution(level, cube, 0, &core, NULL, true);
 		if (rv) {
 			if (core.size() < cube.size()) {
@@ -699,7 +699,7 @@ class IC3 {
 				*fail = 1;
 			}
 			if (next_first_model == Minisat::l_False && next_second_model == Minisat::l_False) {
-				*fail = 0;
+				*fail = 1;
 			}
 		}
 		return rv;
@@ -753,7 +753,9 @@ class IC3 {
 	{
 		orderCube(cube);
 		for (size_t i = 0; i < cube.size();) {
-			if (i + 1 < cube.size()) {
+			// if (i + 1 < cube.size()) {
+			if (0) {
+				terminate();
 				Minisat::Lit first = cube[i];
 				Minisat::Lit second = cube[i + 1];
 				LitVec cp(cube.begin(), cube.begin() + i);
@@ -762,32 +764,39 @@ class IC3 {
 				if (double_drop_down(level, cp, first, second, &fail)) {
 					LitSet lits(cp.begin(), cp.end());
 					LitVec tmp;
-					for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
-						if (lits.find(*j) != lits.end())
-							tmp.push_back(*j);
+					for (int j = 0; j < i; ++j)
+						if (lits.find(cube[j]) != lits.end())
+							tmp.push_back(cube[j]);
+					int tmp_size = tmp.size();
+					for (int j = i; j < cube.size(); ++j)
+						if (lits.find(cube[j]) != lits.end())
+							tmp.push_back(cube[j]);
+					i = tmp_size;
 					cube.swap(tmp);
 				} else {
-					if (fail == 0) {
-						LitVec cp(cube.begin(), cube.begin() + i);
-						cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
-						if (ctgDown(level, cp, i, 1)) {
-							LitSet lits(cp.begin(), cp.end());
-							LitVec tmp;
-							for (LitVec::const_iterator j = cube.begin(); j != cube.end();
-							     ++j)
-								if (lits.find(*j) != lits.end())
-									tmp.push_back(*j);
-							cube.swap(tmp);
-						} else {
-							++i;
-						}
-					} else if (fail == 1) {
-						++i;
-					} else if (fail == 2) {
+					if (fail < 1 || fail > 2) {
+						terminate();
+					}
+					if (fail == 2) {
 						swap(cube[i], cube[i + 1]);
-						++i;
+					}
+					i += 1;
+					LitVec cp(cube.begin(), cube.begin() + i);
+					cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
+					if (ctgDown(level, cp, i, 1)) {
+						LitSet lits(cp.begin(), cp.end());
+						LitVec tmp;
+						for (int j = 0; j < i; ++j)
+							if (lits.find(cube[j]) != lits.end())
+								tmp.push_back(cube[j]);
+						int tmp_size = tmp.size();
+						for (int j = i; j < cube.size(); ++j)
+							if (lits.find(cube[j]) != lits.end())
+								tmp.push_back(cube[j]);
+						i = tmp_size;
+						cube.swap(tmp);
 					} else {
-						std::terminate();
+						++i;
 					}
 				}
 			} else {
@@ -796,9 +805,14 @@ class IC3 {
 				if (ctgDown(level, cp, i, 1)) {
 					LitSet lits(cp.begin(), cp.end());
 					LitVec tmp;
-					for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
-						if (lits.find(*j) != lits.end())
-							tmp.push_back(*j);
+					for (int j = 0; j < i; ++j)
+						if (lits.find(cube[j]) != lits.end())
+							tmp.push_back(cube[j]);
+					int tmp_size = tmp.size();
+					for (int j = i; j < cube.size(); ++j)
+						if (lits.find(cube[j]) != lits.end())
+							tmp.push_back(cube[j]);
+					i = tmp_size;
 					cube.swap(tmp);
 				} else {
 					++i;
