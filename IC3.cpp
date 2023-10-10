@@ -492,8 +492,7 @@ class IC3 {
 				assumps.push(la);
 			}
 		}
-		orderAssumps(assumps, false,
-			     sz); // empirically found to be best choice
+		orderAssumps(assumps, false, sz); // empirically found to be best choice
 		// State s, inputs i, transition relation T, successor t:
 		//   s & i & T & ~t' is unsat
 		// Core assumptions reveal a lifting of s.
