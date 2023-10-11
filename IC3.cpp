@@ -232,6 +232,7 @@ class IC3 {
 		LitVec latches;
 		LitVec inputs;
 		size_t index; // for pool
+		LitVec blocked_core;
 		bool used; // for pool
 	};
 	vector<State> states;
@@ -261,6 +262,7 @@ class IC3 {
 		st.used = false;
 		st.latches.clear();
 		st.inputs.clear();
+		st.blocked_core.clear();
 		if (nextState > st.index - 1)
 			nextState = st.index - 1;
 	}
@@ -270,6 +272,7 @@ class IC3 {
 			i->used = false;
 			i->latches.clear();
 			i->inputs.clear();
+			i->blocked_core.clear();
 		}
 		nextState = 0;
 	}
@@ -695,6 +698,101 @@ class IC3 {
 		}
 	}
 
+	void bsg_mic(size_t level, LitVec &cube, size_t recDepth, size_t succ, size_t depth)
+	{
+		while (true) {
+			MSLitVec cls;
+			cls.capacity(cube.size());
+			for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
+				cls.push(~*i);
+			frames[level + 1].consecution->addClause(cls);
+			if (succ) {
+				LitVec core;
+				size_t predi;
+				if (consecution(level + 1, state(succ).latches, succ, &core, &predi)) {
+					state(succ).blocked_core = core;
+					break;
+				} else {
+					LitVec cp;
+					for (size_t i = 0; i < cube.size(); ++i)
+						if (binary_search(state(predi).latches.begin(),
+								  state(predi).latches.end(), cube[i]))
+							cp.push_back(cube[i]);
+					if (ctgDown(level, cp, 0, recDepth + 1)) {
+						LitSet lits(cp.begin(), cp.end());
+						LitVec tmp;
+						for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
+							if (lits.find(*j) != lits.end())
+								tmp.push_back(*j);
+						cube.swap(tmp);
+					} else {
+						// obls.insert(Obligation(predi, level, depth));
+						break;
+					}
+				}
+			} else {
+				if (level < k - 1) {
+					terminate();
+				}
+				if (level >= k) {
+					break;
+				}
+				if (frames[k].consecution->solve(model.primedError())) {
+					size_t predi = stateOf(frames[k]);
+					LitVec cp;
+					for (size_t i = 0; i < cube.size(); ++i)
+						if (binary_search(state(predi).latches.begin(),
+								  state(predi).latches.end(), cube[i]))
+							cp.push_back(cube[i]);
+					if (ctgDown(level, cp, 0, recDepth + 1)) {
+						LitSet lits(cp.begin(), cp.end());
+						LitVec tmp;
+						for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
+							if (lits.find(*j) != lits.end())
+								tmp.push_back(*j);
+						cube.swap(tmp);
+					} else {
+						// obls.insert(Obligation(predi, level, depth));
+						break;
+					}
+				} else {
+					error_blocked = k;
+					break;
+				}
+			}
+		}
+		++nmic; // stats
+		// try dropping each literal in turn
+		size_t attempts = micAttempts;
+		orderCube(cube);
+		for (size_t i = 0; i < cube.size();) {
+			LitVec cp(cube.begin(), cube.begin() + i);
+			cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
+			if (ctgDown(level, cp, i, recDepth)) {
+				// maintain original order
+				LitSet lits(cp.begin(), cp.end());
+				LitVec tmp;
+				for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
+					if (lits.find(*j) != lits.end())
+						tmp.push_back(*j);
+				cube.swap(tmp);
+				// reset attempts
+				attempts = micAttempts;
+			} else {
+				if (!--attempts) {
+					// Limit number of attempts: if micAttempts literals in a
+					// row cannot be dropped, conclude that the cube is just
+					// about minimal.  Definitely improves mics/second to use
+					// a low micAttempts, but does it improve overall
+					// performance?
+					++nAbortMic; // stats
+					return;
+				}
+				++i;
+			}
+		}
+	}
+
 	// wrapper to start inductive generalization
 	void mic(size_t level, LitVec &cube)
 	{
@@ -726,10 +824,11 @@ class IC3 {
 
 	// ~cube was found to be inductive relative to level; now see if
 	// we can do better.
-	size_t generalize(size_t level, LitVec cube)
+	size_t generalize(size_t level, LitVec cube, size_t succ, size_t depth)
 	{
 		// generalize
-		mic(level, cube);
+		// mic(level, cube);
+		bsg_mic(level, cube, 1, succ, depth);
 		// push
 		do {
 			++level;
@@ -738,22 +837,50 @@ class IC3 {
 		return level;
 	}
 
+	bool trivial_contained(size_t level, LitVec &cube)
+	{
+		LitVec cp = cube;
+		sort(cp.begin(), cp.end());
+		for (size_t l = level; l <= k + 1; ++l) {
+			for (CubeSet::const_iterator i = frames[l].borderCubes.begin();
+			     i != frames[l].borderCubes.end(); ++i) {
+				if (includes(cp.begin(), cp.end(), i->begin(), i->end())) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	size_t cexState; // beginning of counterexample trace
+	PriorityQueue obls;
 
 	// Process obligations according to priority.
-	bool handleObligations(PriorityQueue obls)
+	bool handleObligations()
 	{
 		while (!obls.empty()) {
 			PriorityQueue::iterator obli = obls.begin();
 			Obligation obl = *obli;
 			LitVec core;
 			size_t predi;
+			// if (trivial_contained(obl.level + 1, state(obl.state).latches)) {
+			// 	obls.erase(obli);
+			// 	continue;
+			// }
+			if (!state(obl.state).blocked_core.empty()) {
+				obls.erase(obli);
+				size_t n = generalize(obl.level, state(obl.state).blocked_core,
+						      state(obl.state).successor, obl.depth);
+				if (n <= k)
+					obls.insert(Obligation(obl.state, n, obl.depth));
+				continue;
+			}
 			// Is the obligation fulfilled?
 			if (consecution(obl.level, state(obl.state).latches, obl.state, &core, &predi)) {
 				// Yes, so generalize and possibly produce a new obligation
 				// at a higher level.
 				obls.erase(obli);
-				size_t n = generalize(obl.level, core);
+				size_t n = generalize(obl.level, core, state(obl.state).successor, obl.depth);
 				if (n <= k)
 					obls.insert(Obligation(obl.state, n, obl.depth));
 			} else if (obl.level == 0) {
@@ -772,6 +899,8 @@ class IC3 {
 	bool trivial; // indicates whether strengthening was required
 		// during major iteration
 
+	size_t error_blocked;
+
 	// Strengthens frontier to remove error successors.
 	bool strengthen()
 	{
@@ -780,6 +909,9 @@ class IC3 {
 		earliest = k + 1; // earliest frame with enlarged borderCubes
 		while (true) {
 			++nQuery;
+			if (error_blocked == k) {
+				return true;
+			}
 			startTimer(); // stats
 			bool rv = frontier.consecution->solve(model.primedError());
 			endTimer(satTime);
@@ -788,10 +920,9 @@ class IC3 {
 			// handle CTI with error successor
 			++nCTI; // stats
 			trivial = false;
-			PriorityQueue pq;
 			// enqueue main obligation and handle
-			pq.insert(Obligation(stateOf(frontier), k - 1, 1));
-			if (!handleObligations(pq))
+			obls.insert(Obligation(stateOf(frontier), k - 1, 1));
+			if (!handleObligations())
 				return false;
 			// finished with States for this iteration, so clean up
 			resetStates();
