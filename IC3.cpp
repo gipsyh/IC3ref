@@ -697,6 +697,7 @@ class IC3 {
 			}
 		}
 	}
+	int x, y, z;
 
 	void bsg_mic(size_t level, LitVec &cube, size_t recDepth, size_t succ, size_t depth)
 	{
@@ -708,25 +709,31 @@ class IC3 {
 			frames[level + 1].consecution->addClause(cls);
 			if (succ) {
 				LitVec core;
-				size_t predi;
-				if (consecution(level + 1, state(succ).latches, succ, &core, &predi)) {
+				if (!state(succ).blocked_core.empty())
+					break;
+				if (consecution(level + 1, state(succ).latches, succ, &core, NULL)) {
 					state(succ).blocked_core = core;
+					z += 1;
+					// cout << "z" << z << endl;
 					break;
 				} else {
 					LitVec cp;
 					for (size_t i = 0; i < cube.size(); ++i)
-						if (binary_search(state(predi).latches.begin(),
-								  state(predi).latches.end(), cube[i]))
+						if (frames[level + 1].consecution->modelValue(cube[i]) ==
+						    Minisat::l_True)
 							cp.push_back(cube[i]);
+					if (cp.size() > cube.size()) {
+						terminate();
+					}
 					if (ctgDown(level, cp, 0, recDepth + 1)) {
-						LitSet lits(cp.begin(), cp.end());
-						LitVec tmp;
-						for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
-							if (lits.find(*j) != lits.end())
-								tmp.push_back(*j);
-						cube.swap(tmp);
+						cube.swap(cp);
+						x += 1;
+						// cout << "x" << x << endl;
 					} else {
-						// obls.insert(Obligation(predi, level, depth));
+						y += 1;
+						size_t predi = stateOf(frames[level + 1], succ);
+						// cout << "y" << y << endl;
+						obls.insert(Obligation(predi, level, depth + 1));
 						break;
 					}
 				}
@@ -737,22 +744,22 @@ class IC3 {
 				if (level >= k) {
 					break;
 				}
+				if (error_blocked == k) {
+					break;
+				}
 				if (frames[k].consecution->solve(model.primedError())) {
-					size_t predi = stateOf(frames[k]);
 					LitVec cp;
 					for (size_t i = 0; i < cube.size(); ++i)
-						if (binary_search(state(predi).latches.begin(),
-								  state(predi).latches.end(), cube[i]))
+						if (frames[k].consecution->modelValue(cube[i]) == Minisat::l_True)
 							cp.push_back(cube[i]);
+					if (cp.size() > cube.size()) {
+						terminate();
+					}
 					if (ctgDown(level, cp, 0, recDepth + 1)) {
-						LitSet lits(cp.begin(), cp.end());
-						LitVec tmp;
-						for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
-							if (lits.find(*j) != lits.end())
-								tmp.push_back(*j);
-						cube.swap(tmp);
+						cube.swap(cp);
 					} else {
-						// obls.insert(Obligation(predi, level, depth));
+						size_t predi = stateOf(frames[k]);
+						obls.insert(Obligation(predi, level, depth));
 						break;
 					}
 				} else {
@@ -837,6 +844,8 @@ class IC3 {
 		return level;
 	}
 
+	int zzz;
+
 	bool trivial_contained(size_t level, LitVec &cube)
 	{
 		LitVec cp = cube;
@@ -863,11 +872,13 @@ class IC3 {
 			Obligation obl = *obli;
 			LitVec core;
 			size_t predi;
-			// if (trivial_contained(obl.level + 1, state(obl.state).latches)) {
-			// 	obls.erase(obli);
-			// 	continue;
-			// }
+			if (trivial_contained(obl.level + 1, state(obl.state).latches)) {
+				obls.erase(obli);
+				continue;
+			}
 			if (!state(obl.state).blocked_core.empty()) {
+				// zzz += 1;
+				// cout << "zzz" << zzz << endl;
 				obls.erase(obli);
 				size_t n = generalize(obl.level, state(obl.state).blocked_core,
 						      state(obl.state).successor, obl.depth);
@@ -985,6 +996,30 @@ class IC3 {
 			frames[i].consecution->simplify();
 		lifts->simplify();
 		return false;
+	}
+
+	bool verify()
+	{
+		int b = 1;
+		for (size_t i = 1; i <= k; ++i) {
+			if (frames[i].borderCubes.empty()) {
+				b = i;
+				break;
+			}
+		}
+		if (frames[b].consecution->solve(model.error())) {
+			return false;
+		}
+		for (size_t i = b; i < frames.size(); ++i) {
+			for (CubeSet::const_iterator j = frames[i].borderCubes.begin();
+			     j != frames[i].borderCubes.end(); ++j)
+				if (!consecution(b, *j)) {
+					printf("verify failed\n");
+					return false;
+				}
+		}
+		printf("verify\n");
+		return true;
 	}
 
 	int nQuery, nCTI, nCTG, nmic;
