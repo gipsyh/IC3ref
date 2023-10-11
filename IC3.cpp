@@ -871,6 +871,7 @@ class IC3 {
 				obls.erase(obli);
 				size_t n = generalize(obl.level, state(obl.state).blocked_core,
 						      state(obl.state).successor, obl.depth);
+				state(obl.state).blocked_core.clear();
 				if (n <= k)
 					obls.insert(Obligation(obl.state, n, obl.depth));
 				continue;
