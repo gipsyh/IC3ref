@@ -178,6 +178,33 @@ class IC3 {
 		delete lifts;
 	}
 
+	bool verify()
+	{
+		int b = 1;
+		for (size_t i = 1; i <= k; ++i) {
+			if (frames[i].borderCubes.empty()) {
+				b = i;
+				break;
+			}
+		}
+		if (frames[b].consecution->solve(model.error())) {
+			return false;
+		}
+		int num_inv = 0;
+		for (size_t i = b; i < frames.size(); ++i) {
+			for (CubeSet::const_iterator j = frames[i].borderCubes.begin();
+			     j != frames[i].borderCubes.end(); ++j) {
+				num_inv++;
+				if (!consecution(b, *j)) {
+					printf("verify failed\n");
+					return false;
+				}
+			}
+		}
+		printf("verify with %d inv\n", num_inv);
+		return true;
+	}
+
 	// The main loop.
 	bool check()
 	{
@@ -188,8 +215,11 @@ class IC3 {
 			extend(); // push frontier frame
 			if (!strengthen())
 				return false; // strengthen to remove bad successors
-			if (propagate())
+			if (propagate()) {
+				// if (!verify())
+					// terminate();
 				return true; // propagate clauses; check for proof
+			}
 			printStats();
 			++k; // increment frontier
 		}
@@ -508,6 +538,78 @@ class IC3 {
 		// deactivate negation of successor
 		lifts->releaseVar(~act);
 		return st;
+	}
+
+	LitVec succstateOf(Frame &fr, const LitVec &latches)
+	{
+		// create state
+		size_t st = newState();
+		MSLitVec assumps;
+		assumps.capacity(1 + 2 * (model.endInputs() - model.beginInputs()) +
+				 (model.endLatches() - model.beginLatches()));
+		Minisat::Lit act = Minisat::mkLit(lifts->newVar()); // activation literal
+		assumps.push(act);
+		Minisat::vec<Minisat::Lit> cls;
+		cls.push(~act);
+		cls.push(notInvConstraints); // successor must satisfy inv. constraint
+		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
+			cls.push(model.primeLit(~*i));
+		lifts->addClause_(cls);
+		// extract and assert primary inputs
+		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
+			Minisat::lbool val = fr.consecution->modelValue(i->var());
+			if (val != Minisat::l_Undef) {
+				Minisat::Lit pi = i->lit(val == Minisat::l_False);
+				state(st).inputs.push_back(pi); // record full inputs
+				assumps.push(pi);
+			}
+		}
+		// some properties include inputs, so assert primed inputs after
+		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
+			Minisat::lbool pval = fr.consecution->modelValue(model.primeVar(*i).var());
+			if (pval != Minisat::l_Undef)
+				assumps.push(model.primeLit(i->lit(pval == Minisat::l_False)));
+		}
+		vector<Minisat::Lit> tmp;
+		set<Minisat::Var> set;
+		for (auto &l : latches)
+			set.insert(Minisat::var(l));
+		for (VarVec::const_iterator i = model.beginLatches(); i != model.endLatches(); ++i) {
+			if (set.find(i->var()) == set.end()) {
+				Var pvar = model.primeVar(*i);
+				Minisat::lbool val = fr.consecution->modelValue(pvar.var());
+				if (val != Minisat::l_Undef) {
+					tmp.push_back(pvar.lit(val == Minisat::l_False));
+				}
+			}
+		}
+		random_shuffle(tmp.begin(), tmp.end());
+		for (auto &l : tmp) {
+			assumps.push(l);
+		}
+
+		for (VarVec::const_iterator i = model.beginLatches(); i != model.endLatches(); ++i) {
+			Minisat::lbool val = fr.consecution->modelValue(i->var());
+			if (val != Minisat::l_Undef) {
+				Minisat::Lit la = i->lit(val == Minisat::l_False);
+				assumps.push(la);
+			}
+		}
+		bool rv = lifts->solve(assumps);
+		assert(!rv);
+		if (rv)
+			terminate();
+		LitVec res;
+		for (VarVec::const_iterator i = model.beginLatches(); i != model.endLatches(); ++i) {
+			if (set.find(i->var()) == set.end()) {
+				Var pvar = model.primeVar(*i);
+				Minisat::lbool val = fr.consecution->modelValue(pvar.var());
+				if (lifts->conflict.has(~pvar.lit(val == Minisat::l_False)))
+					res.push_back(i->lit(val == Minisat::l_False));
+			}
+		}
+		lifts->releaseVar(~act);
+		return res;
 	}
 
 	// Checks if cube contains any initial states.
@@ -839,6 +941,23 @@ class IC3 {
 					++j;
 					fr.borderCubes.erase(tmp);
 				} else {
+					LitVec res = succstateOf(fr, *j);
+					random_shuffle(res.begin(), res.end());
+					cout << res.size() << " " << j->size() << endl;
+					cout << stringOfLitVec(res) << endl;
+					cout << stringOfLitVec(*j) << endl;
+					for (auto &l : res) {
+						j->push_back(~l);
+						if (consecution(i, *j, 0, &core)) {
+							cout << stringOfLitVec(*j) << endl;
+							addCube(i + 1, core, core.size() < j->size(), true);
+							j->pop_back();
+							cout << "success" << endl;
+							break;
+						}
+						cout << "faild" << endl;
+						j->pop_back();
+					}
 					++ckeep;
 					++j;
 				}
