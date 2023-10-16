@@ -713,8 +713,13 @@ class IC3 {
 				LitVec *cube = ic3->tasks[pid].drop.cube;
 				int var = ic3->tasks[pid].drop.var;
 				ic3->tasks[pid].drop.core.clear();
-				LitVec cp(cube->begin(), cube->begin() + var);
-				cp.insert(cp.end(), cube->begin() + var + 1, cube->end());
+				LitVec cp;
+				if (var >= 0) {
+					cp.insert(cp.end(), cube->begin(), cube->begin() + var);
+					cp.insert(cp.end(), cube->begin() + var + 1, cube->end());
+				} else {
+					cp.insert(cp.end(), cube->begin(), cube->end());
+				}
 				ic3->tasks[pid].drop.rv =
 					ic3->ctgDown(ic3->tasks[pid].drop.level, cp, 0, ic3->tasks[pid].drop.recDepth);
 				ic3->tasks[pid].drop.core = cp;
@@ -937,9 +942,9 @@ class IC3 {
 		}
 	}
 
-	vector<WorkerResult> pdrop_multi(size_t level, LitVec &cube, size_t recDepth)
+	vector<WorkerResult> pdrop_multi(size_t level, LitVec &cube, size_t recDepth, bool test_try_cube)
 	{
-		int nump = min(int(cube.size()), NUM_THREAD);
+		int nump = min(int(cube.size() + test_try_cube), NUM_THREAD);
 		vector<WorkerResult> res(nump);
 		int num_res = 0;
 		for (int i = 0; i < nump; ++i) {
@@ -947,7 +952,7 @@ class IC3 {
 			tasks[i].drop.cube = &cube;
 			tasks[i].drop.level = level;
 			tasks[i].drop.recDepth = recDepth;
-			tasks[i].drop.var = i;
+			tasks[i].drop.var = i - test_try_cube;
 			tasks[i].type = 1;
 			tasks[i].mtx.unlock();
 		}
@@ -961,10 +966,12 @@ class IC3 {
 		}
 	}
 
-	bool analyse(vector<WorkerResult> &pres, LitVec &res, LitVec &try_cube, int origin)
+	bool analyse(vector<WorkerResult> &pres, LitVec &res, LitVec &try_cube, int origin, bool &test_try_cube)
 	{
 		bool all_false = true;
 		bool all_drop_small = true;
+		bool ttc = test_try_cube;
+		test_try_cube = false;
 
 		for (auto &pr : pres) {
 			if (pr.rv) {
@@ -979,24 +986,27 @@ class IC3 {
 				// cout << "fail" << endl;
 			}
 		}
-		if (all_false)
+		if (all_false || try_cube.size() == res.size())
 			return false;
 
 		if (all_drop_small) {
 			LitVec tmp;
 			for (int i = 0; i < try_cube.size(); ++i) {
-				if (i < pres.size()) {
-					if (!pres[i].rv)
+				int pres_i = i + ttc;
+				if (pres_i < pres.size()) {
+					if (!pres[pres_i].rv)
 						tmp.push_back(try_cube[i]);
 				} else {
 					tmp.push_back(try_cube[i]);
 				}
 			}
 			try_cube = tmp;
+			if (try_cube.size() < NUM_THREAD)
+				test_try_cube = true;
 			return true;
 		}
 
-		if (res.size() * 3 / 2 >= origin || (origin <= 16 && res.size() * 2 >= origin)) {
+		if (origin > 5 && (res.size() * 3 / 2 >= origin || (origin <= 16 && res.size() * 2 >= origin))) {
 			try_cube = res;
 			random_shuffle(try_cube.begin(), try_cube.end());
 			return true;
@@ -1009,29 +1019,23 @@ class IC3 {
 	{
 		++nmic; // stats
 		// try dropping each literal in turn
+		if (cube.size() <= 1)
+			return;
 		size_t attempts = micAttempts;
 		orderCube(cube);
 		LitVec res = cube;
 		bool retry = true;
 		LitVec cube_try = cube;
 		int num_try = 0;
+		bool test_try_cube = false;
 		while (retry) {
 			// cout << "tryed " << num_try << " size " << cube_try.size() << endl;
 			num_try++;
 			vector<WorkerResult> pres;
 
-			pres = pdrop_multi(level, cube_try, recDepth);
+			pres = pdrop_multi(level, cube_try, recDepth, test_try_cube);
 
-			// for (int i = 0; i < min(int(cube_try.size()), NUM_THREAD); ++i) {
-			// 	LitVec cp(cube_try.begin(), cube_try.begin() + i);
-			// 	cp.insert(cp.end(), cube_try.begin() + i + 1, cube_try.end());
-			// 	if (ctgDown(level, cp, i, recDepth)) {
-			// 		pres.push_back(WorkerResult(1, cp));
-			// 	} else
-			// 		pres.push_back(WorkerResult(0));
-			// }
-
-			retry = analyse(pres, res, cube_try, cube.size());
+			retry = analyse(pres, res, cube_try, cube.size(), test_try_cube);
 		}
 
 		// for (size_t i = 0; i < cube.size();) {
@@ -1068,7 +1072,7 @@ clean:
 		// 	++y;
 		// else
 		// 	++z;
-		// cout << "ttt " << res.size() << " " << cube.size() << endl;
+		// cout << "final size " << res.size() << " " << cube.size() << endl;
 		// cout << "static " << x << " " << y << " " << z << endl;
 		cube = res;
 	}
