@@ -25,6 +25,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <iostream>
 #include <set>
 #include <sys/times.h>
+#include <thread>
+#include <mutex>
+#include <queue>
+#include <map>
+#include <condition_variable>
+#include <chrono>
 
 #include "IC3.h"
 #include "Solver.h"
@@ -126,8 +132,89 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //    reduction are applied to a state, followed by mic before
 //    pushing.  The resulting cube is sufficiently small.
 
+const int NUM_THREAD = 8;
+thread_local int pid;
+
 namespace IC3
 {
+
+class WorkerTask {
+    public:
+	mutex mtx;
+	int type;
+	struct {
+		size_t fi;
+		const LitVec latches;
+		size_t succ;
+		bool fcore;
+		LitVec core;
+		bool fpred;
+		size_t pred;
+		bool orderedCore;
+		int rv;
+	} consecution;
+
+	struct {
+		size_t level;
+		int var;
+		LitVec *cube;
+		size_t recDepth;
+		LitVec core;
+		int rv;
+	} drop;
+
+	WorkerTask()
+	{
+	}
+};
+
+class WorkerResult {
+    public:
+	bool rv;
+	LitVec core;
+	size_t pred;
+
+	WorkerResult()
+	{
+	}
+
+	WorkerResult(bool _rv, LitVec _core = LitVec(), size_t _pred = 0)
+		: rv(_rv)
+		, core(_core)
+		, pred(_pred)
+	{
+	}
+};
+
+class MessageQueue {
+    public:
+	queue<int> queue;
+	mutex mtx;
+	condition_variable cv;
+	MessageQueue()
+	{
+	}
+
+	void send(int pid)
+	{
+		lock_guard<mutex> lock(mtx);
+		queue.push(pid);
+		cv.notify_one();
+	}
+
+	int recv()
+	{
+		unique_lock<mutex> lock(mtx);
+		if (queue.empty()) {
+			cv.wait(lock);
+		}
+		int pid = queue.front();
+		queue.pop();
+		lock.unlock();
+		cv.notify_one();
+		return pid;
+	}
+};
 
 class IC3 {
     public:
@@ -154,6 +241,11 @@ class IC3 {
 		, nCoreReduced(0)
 		, nAbortJoin(0)
 		, nAbortMic(0)
+		, quit(false)
+		, x(0)
+		, y(0)
+		, z(0)
+		, t(0)
 	{
 		slimLitOrder.heuristicLitOrder = &litOrder;
 
@@ -169,12 +261,23 @@ class IC3 {
 		     i != model.invariantConstraints().end(); ++i)
 			cls.push(model.primeLit(~*i));
 		lifts->addClause_(cls);
+
+		for (int i = 0; i < NUM_THREAD; ++i) {
+			tasks[i].mtx.lock();
+			workers[i] = thread(pworker, this, i);
+		}
 	}
 	~IC3()
 	{
+		quit = true;
+		for (int i = 0; i < NUM_THREAD; ++i)
+			tasks[i].mtx.unlock();
+		for (int i = 0; i < NUM_THREAD; ++i)
+			workers[i].join();
 		for (vector<Frame>::const_iterator i = frames.begin(); i != frames.end(); ++i)
-			if (i->consecution)
-				delete i->consecution;
+			for (int j = 0; j < NUM_THREAD; ++j)
+				if (i->consecution[j])
+					delete i->consecution[j];
 		delete lifts;
 	}
 
@@ -343,7 +446,7 @@ class IC3 {
 	struct Frame {
 		size_t k; // steps from initial state
 		CubeSet borderCubes; // additional cubes in this and previous frames
-		Minisat::Solver *consecution;
+		Minisat::Solver *consecution[NUM_THREAD];
 	};
 	vector<Frame> frames;
 
@@ -357,14 +460,16 @@ class IC3 {
 			frames.resize(frames.size() + 1);
 			Frame &fr = frames.back();
 			fr.k = frames.size() - 1;
-			fr.consecution = model.newSolver();
-			if (random) {
-				fr.consecution->random_seed = rand();
-				fr.consecution->rnd_init_act = true;
+			for (int i = 0; i < NUM_THREAD; ++i) {
+				fr.consecution[i] = model.newSolver();
+				if (random) {
+					fr.consecution[i]->random_seed = rand();
+					fr.consecution[i]->rnd_init_act = true;
+				}
+				if (fr.k == 0)
+					model.loadInitialCondition(*fr.consecution[i]);
+				model.loadTransitionRelation(*fr.consecution[i]);
 			}
-			if (fr.k == 0)
-				model.loadInitialCondition(*fr.consecution);
-			model.loadTransitionRelation(*fr.consecution);
 		}
 	}
 
@@ -468,7 +573,7 @@ class IC3 {
 		lifts->addClause_(cls);
 		// extract and assert primary inputs
 		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
-			Minisat::lbool val = fr.consecution->modelValue(i->var());
+			Minisat::lbool val = fr.consecution[pid]->modelValue(i->var());
 			if (val != Minisat::l_Undef) {
 				Minisat::Lit pi = i->lit(val == Minisat::l_False);
 				state(st).inputs.push_back(pi); // record full inputs
@@ -477,7 +582,7 @@ class IC3 {
 		}
 		// some properties include inputs, so assert primed inputs after
 		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
-			Minisat::lbool pval = fr.consecution->modelValue(model.primeVar(*i).var());
+			Minisat::lbool pval = fr.consecution[pid]->modelValue(model.primeVar(*i).var());
 			if (pval != Minisat::l_Undef)
 				assumps.push(model.primeLit(i->lit(pval == Minisat::l_False)));
 		}
@@ -485,7 +590,7 @@ class IC3 {
 		// extract and assert latches
 		LitVec latches;
 		for (VarVec::const_iterator i = model.beginLatches(); i != model.endLatches(); ++i) {
-			Minisat::lbool val = fr.consecution->modelValue(i->var());
+			Minisat::lbool val = fr.consecution[pid]->modelValue(i->var());
 			if (val != Minisat::l_Undef) {
 				Minisat::Lit la = i->lit(val == Minisat::l_False);
 				latches.push_back(la);
@@ -527,7 +632,7 @@ class IC3 {
 		MSLitVec assumps, cls;
 		assumps.capacity(1 + latches.size());
 		cls.capacity(1 + latches.size());
-		Minisat::Lit act = Minisat::mkLit(fr.consecution->newVar());
+		Minisat::Lit act = Minisat::mkLit(fr.consecution[pid]->newVar());
 		assumps.push(act);
 		cls.push(~act);
 		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i) {
@@ -542,17 +647,17 @@ class IC3 {
 		// ... now prime
 		for (int i = 1; i < assumps.size(); ++i)
 			assumps[i] = model.primeLit(assumps[i]);
-		fr.consecution->addClause_(cls);
+		fr.consecution[pid]->addClause_(cls);
 		// F_fi & ~latches & T & latches'
 		++nQuery;
 		startTimer(); // stats
-		bool rv = fr.consecution->solve(assumps);
+		bool rv = fr.consecution[pid]->solve(assumps);
 		endTimer(satTime);
 		if (rv) {
 			// fails: extract predecessor(s)
 			if (pred)
 				*pred = stateOf(fr, succ);
-			fr.consecution->releaseVar(~act);
+			fr.consecution[pid]->releaseVar(~act);
 			return false;
 		}
 		// succeeds
@@ -562,18 +667,115 @@ class IC3 {
 				reverse(assumps + 1, assumps + assumps.size());
 				++nQuery;
 				startTimer(); // stats
-				rv = fr.consecution->solve(assumps);
+				rv = fr.consecution[pid]->solve(assumps);
 				assert(!rv);
 				endTimer(satTime);
 			}
 			for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-				if (fr.consecution->conflict.has(~model.primeLit(*i)))
+				if (fr.consecution[pid]->conflict.has(~model.primeLit(*i)))
 					core->push_back(*i);
 			if (!initiation(*core))
 				*core = latches;
 		}
-		fr.consecution->releaseVar(~act);
+		fr.consecution[pid]->releaseVar(~act);
 		return true;
+	}
+
+	thread workers[NUM_THREAD];
+	WorkerTask tasks[NUM_THREAD];
+	MessageQueue mq;
+	bool quit;
+
+	static void pworker(IC3 *ic3, int id)
+	{
+		pid = id;
+		cout << "thread" << pid << " start" << endl;
+		while (true) {
+			ic3->tasks[pid].mtx.lock();
+			if (ic3->quit)
+				return;
+			if (ic3->tasks[pid].type == 0) {
+				LitVec *core = NULL;
+				if (ic3->tasks[pid].consecution.fcore) {
+					ic3->tasks[pid].consecution.core.clear();
+					core = &ic3->tasks[pid].consecution.core;
+				}
+				size_t *pred = NULL;
+				if (ic3->tasks[pid].consecution.fpred) {
+					terminate();
+					pred = &ic3->tasks[pid].consecution.pred;
+				}
+				ic3->tasks[pid].consecution.rv = ic3->consecution(
+					ic3->tasks[pid].consecution.fi, ic3->tasks[pid].consecution.latches,
+					ic3->tasks[pid].consecution.succ, core, pred,
+					ic3->tasks[pid].consecution.orderedCore);
+			} else if (ic3->tasks[pid].type == 1) {
+				LitVec *cube = ic3->tasks[pid].drop.cube;
+				int var = ic3->tasks[pid].drop.var;
+				ic3->tasks[pid].drop.core.clear();
+				LitVec cp(cube->begin(), cube->begin() + var);
+				cp.insert(cp.end(), cube->begin() + var + 1, cube->end());
+				ic3->tasks[pid].drop.rv =
+					ic3->ctgDown(ic3->tasks[pid].drop.level, cp, 0, ic3->tasks[pid].drop.recDepth);
+				ic3->tasks[pid].drop.core = cp;
+			} else if (ic3->tasks[pid].type == 2) {
+				int k = ic3->k;
+				for (size_t i = ic3->trivial ? k : 1; i <= k + 1; ++i)
+					ic3->frames[i].consecution[pid]->simplify();
+			} else
+				terminate();
+			ic3->mq.send(pid);
+		}
+	}
+
+	void pconsecution(int thread, size_t fi, LitVec latches, size_t succ = 0, bool fcore = false,
+			  bool fpred = false, bool orderedCore = false)
+	{
+		tasks[thread].consecution.fi = fi;
+		tasks[thread].consecution.latches = latches;
+		tasks[thread].consecution.succ = succ;
+		tasks[thread].consecution.fcore = fcore;
+		tasks[thread].consecution.core.clear();
+		tasks[thread].consecution.fpred = fpred;
+		tasks[thread].consecution.pred = 0;
+		tasks[thread].consecution.orderedCore = orderedCore;
+		tasks[thread].type = 0;
+		tasks[thread].mtx.unlock();
+	}
+
+	vector<WorkerResult> pconsecution_multi(size_t fi, const vector<LitVec> latches, size_t succ = 0,
+						bool fcore = false, bool fpred = false, bool orderedCore = false)
+	{
+		vector<WorkerResult> res(latches.size());
+		int num_res = 0;
+		queue<int> avp;
+		map<int, int> task_map;
+		for (int i = 0; i < NUM_THREAD; ++i)
+			avp.push(i);
+		int now = 0;
+		while (true) {
+			if (num_res == latches.size())
+				return res;
+			while (now < latches.size() && avp.size()) {
+				int pid = avp.front();
+				avp.pop();
+				task_map[pid] = now;
+				pconsecution(pid, fi, latches[now], succ, fcore, fpred, orderedCore);
+				now++;
+			}
+			int p = mq.recv();
+			avp.push(p);
+			res[task_map[p]].rv = tasks[p].consecution.rv;
+			if (tasks[p].consecution.rv) {
+				if (fcore)
+					res[task_map[p]].core = tasks[p].consecution.core;
+			} else {
+				if (fpred) {
+					terminate();
+				}
+			}
+			num_res++;
+		}
 	}
 
 	size_t maxDepth, maxCTGs, maxJoins, micAttempts;
@@ -602,6 +804,7 @@ class IC3 {
 				}
 				return rv;
 			}
+			terminate();
 			// prepare to obtain CTG
 			size_t cubeState = newState();
 			state(cubeState).successor = 0;
@@ -656,7 +859,8 @@ class IC3 {
 				return false;
 		}
 	}
-
+	int x, y, z;
+	int t;
 	// Extracts minimal inductive (relative to level) subclause from
 	// ~cube --- at least that's where the name comes from.  With
 	// ctgDown, it's not quite a MIC anymore, but what's returned is
@@ -667,7 +871,25 @@ class IC3 {
 		// try dropping each literal in turn
 		size_t attempts = micAttempts;
 		orderCube(cube);
+		int res = cube.size();
+		if (!t) {
+			t = 1;
+			cout << "begin try " << cube.size() << endl;
+			for (size_t i = 0; i < min(cube.size(), size_t(8)); ++i) {
+				LitVec cp(cube.begin(), cube.begin() + i);
+				cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
+				if (ctgDown(level, cp, i, recDepth)) {
+					res = min((size_t)res, cp.size());
+					cout << "success " << cp.size() << endl;
+				} else {
+					cout << "fail" << endl;
+				}
+			}
+			t = 0;
+		}
 		for (size_t i = 0; i < cube.size();) {
+			if (!t)
+				cout << "normal" << cube.size() << endl;
 			LitVec cp(cube.begin(), cube.begin() + i);
 			cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
 			if (ctgDown(level, cp, i, recDepth)) {
@@ -688,17 +910,173 @@ class IC3 {
 					// a low micAttempts, but does it improve overall
 					// performance?
 					++nAbortMic; // stats
+					if (!t) {
+						if (res < cube.size())
+							++x;
+						else if (res == cube.size())
+							++y;
+						else
+							++z;
+						// cout << "end " << cube.size() << endl;
+						cout << "static " << x << " " << y << " " << z << endl;
+					}
 					return;
 				}
 				++i;
 			}
 		}
+		if (!t) {
+			if (res < cube.size())
+				++x;
+			else if (res == cube.size())
+				++y;
+			else
+				++z;
+			// cout << "end " << cube.size() << endl;
+			cout << "static " << x << " " << y << " " << z << endl;
+		}
+	}
+
+	vector<WorkerResult> pdrop_multi(size_t level, LitVec &cube, size_t recDepth)
+	{
+		int nump = min(int(cube.size()), NUM_THREAD);
+		vector<WorkerResult> res(nump);
+		int num_res = 0;
+		for (int i = 0; i < nump; ++i) {
+			tasks[i].drop.core.clear();
+			tasks[i].drop.cube = &cube;
+			tasks[i].drop.level = level;
+			tasks[i].drop.recDepth = recDepth;
+			tasks[i].drop.var = i;
+			tasks[i].type = 1;
+			tasks[i].mtx.unlock();
+		}
+		while (true) {
+			if (num_res == nump)
+				return res;
+			int p = mq.recv();
+			res[p].rv = tasks[p].drop.rv;
+			res[p].core = tasks[p].drop.core;
+			num_res++;
+		}
+	}
+
+	bool analyse(vector<WorkerResult> &pres, LitVec &res, LitVec &try_cube, int origin)
+	{
+		bool all_false = true;
+		bool all_drop_small = true;
+
+		for (auto &pr : pres) {
+			if (pr.rv) {
+				all_false = false;
+				// cout << "succ prcore " << pr.core.size() << endl;
+				if (pr.core.size() + 1 < try_cube.size()) {
+					all_drop_small = false;
+				}
+				if (pr.core.size() < res.size())
+					res = pr.core;
+			} else {
+				// cout << "fail" << endl;
+			}
+		}
+		if (all_false)
+			return false;
+
+		if (all_drop_small) {
+			LitVec tmp;
+			for (int i = 0; i < try_cube.size(); ++i) {
+				if (i < pres.size()) {
+					if (!pres[i].rv)
+						tmp.push_back(try_cube[i]);
+				} else {
+					tmp.push_back(try_cube[i]);
+				}
+			}
+			try_cube = tmp;
+			return true;
+		}
+
+		if (res.size() * 3 / 2 >= origin || (origin <= 16 && res.size() * 2 >= origin)) {
+			try_cube = res;
+			random_shuffle(try_cube.begin(), try_cube.end());
+			return true;
+		}
+
+		return false;
+	}
+
+	void pmic(size_t level, LitVec &cube, size_t recDepth)
+	{
+		++nmic; // stats
+		// try dropping each literal in turn
+		size_t attempts = micAttempts;
+		orderCube(cube);
+		LitVec res = cube;
+		bool retry = true;
+		LitVec cube_try = cube;
+		int num_try = 0;
+		while (retry) {
+			// cout << "tryed " << num_try << " size " << cube_try.size() << endl;
+			num_try++;
+			vector<WorkerResult> pres;
+
+			pres = pdrop_multi(level, cube_try, recDepth);
+
+			// for (int i = 0; i < min(int(cube_try.size()), NUM_THREAD); ++i) {
+			// 	LitVec cp(cube_try.begin(), cube_try.begin() + i);
+			// 	cp.insert(cp.end(), cube_try.begin() + i + 1, cube_try.end());
+			// 	if (ctgDown(level, cp, i, recDepth)) {
+			// 		pres.push_back(WorkerResult(1, cp));
+			// 	} else
+			// 		pres.push_back(WorkerResult(0));
+			// }
+
+			retry = analyse(pres, res, cube_try, cube.size());
+		}
+
+		// for (size_t i = 0; i < cube.size();) {
+		// 	cout << "normal " << cube.size() << endl;
+		// 	LitVec cp(cube.begin(), cube.begin() + i);
+		// 	cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
+		// 	if (ctgDown(level, cp, i, recDepth)) {
+		// 		// maintain original order
+		// 		LitSet lits(cp.begin(), cp.end());
+		// 		LitVec tmp;
+		// 		for (LitVec::const_iterator j = cube.begin(); j != cube.end(); ++j)
+		// 			if (lits.find(*j) != lits.end())
+		// 				tmp.push_back(*j);
+		// 		cube.swap(tmp);
+		// 		// reset attempts
+		// 		attempts = micAttempts;
+		// 	} else {
+		// 		if (!--attempts) {
+		// 			// Limit number of attempts: if micAttempts literals in a
+		// 			// row cannot be dropped, conclude that the cube is just
+		// 			// about minimal.  Definitely improves mics/second to use
+		// 			// a low micAttempts, but does it improve overall
+		// 			// performance?
+		// 			++nAbortMic; // stats
+		// 			goto clean;
+		// 		}
+		// 		++i;
+		// 	}
+		// }
+clean:
+		// if (res.size() < cube.size())
+		// 	++x;
+		// else if (res.size() == cube.size())
+		// 	++y;
+		// else
+		// 	++z;
+		// cout << "ttt " << res.size() << " " << cube.size() << endl;
+		// cout << "static " << x << " " << y << " " << z << endl;
+		cube = res;
 	}
 
 	// wrapper to start inductive generalization
 	void mic(size_t level, LitVec &cube)
 	{
-		mic(level, cube, 1);
+		pmic(level, cube, 1);
 	}
 
 	size_t earliest; // track earliest modified level in a major iteration
@@ -718,8 +1096,10 @@ class IC3 {
 		cls.capacity(cube.size());
 		for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
 			cls.push(~*i);
-		for (size_t i = toAll ? 1 : level; i <= level; ++i)
-			frames[i].consecution->addClause(cls);
+		for (size_t i = toAll ? 1 : level; i <= level; ++i) {
+			for (int j = 0; j < NUM_THREAD; ++j)
+				frames[i].consecution[j]->addClause(cls);
+		}
 		if (toAll && !silent)
 			updateLitOrder(cube, level);
 	}
@@ -781,7 +1161,7 @@ class IC3 {
 		while (true) {
 			++nQuery;
 			startTimer(); // stats
-			bool rv = frontier.consecution->solve(model.primedError());
+			bool rv = frontier.consecution[0]->solve(model.primedError());
 			endTimer(satTime);
 			if (!rv)
 				return true;
@@ -803,6 +1183,20 @@ class IC3 {
 	// sets agree; hence those clause sets are inductive
 	// strengthenings of the property.  See the four invariants of IC3
 	// in the original paper.
+
+	void psimplify()
+	{
+		for (int i = 0; i < NUM_THREAD; ++i) {
+			tasks[i].type = 2;
+			tasks[i].mtx.unlock();
+		}
+		int num_res = 0;
+		while (num_res < NUM_THREAD) {
+			mq.recv();
+			num_res++;
+		}
+	}
+
 	bool propagate()
 	{
 		if (verbose > 1)
@@ -829,28 +1223,62 @@ class IC3 {
 		for (size_t i = trivial ? k : 1; i <= k; ++i) {
 			int ckeep = 0, cprop = 0, cdrop = 0;
 			Frame &fr = frames[i];
-			for (CubeSet::iterator j = fr.borderCubes.begin(); j != fr.borderCubes.end();) {
-				LitVec core;
-				if (consecution(i, *j, 0, &core)) {
-					++cprop;
-					// only add to frame i+1 unless the core is reduced
-					addCube(i + 1, core, core.size() < j->size(), true);
-					CubeSet::iterator tmp = j;
-					++j;
-					fr.borderCubes.erase(tmp);
-				} else {
-					++ckeep;
-					++j;
+			{
+				vector<LitVec> latchs;
+				for (auto &cube : fr.borderCubes) {
+					latchs.push_back(cube);
+				}
+				// cout << latchs.size() << endl;
+				// auto start = chrono::steady_clock::now();
+				vector<WorkerResult> res = pconsecution_multi(i, latchs, 0, true);
+				// cout << chrono::duration<double, std::milli>(chrono::steady_clock::now() - start).count()
+				//      << endl;
+				int now = 0;
+				for (CubeSet::iterator j = fr.borderCubes.begin(); j != fr.borderCubes.end();) {
+					if (res[now].rv) {
+						++cprop;
+						addCube(i + 1, res[now].core, res[now].core.size() < j->size(), true);
+						CubeSet::iterator tmp = j;
+						++j;
+						fr.borderCubes.erase(tmp);
+					} else {
+						++ckeep;
+						j++;
+					}
+					now++;
 				}
 			}
+			// {
+			// 	// start = chrono::steady_clock::now();
+			// 	for (CubeSet::iterator j = fr.borderCubes.begin(); j != fr.borderCubes.end();) {
+			// 		LitVec core;
+			// 		if (consecution(i, *j, 0, &core)) {
+			// 			// cout << "normalp" << 1 << endl;
+			// 			++cprop;
+			// 			// only add to frame i+1 unless the core is reduced
+			// 			addCube(i + 1, core, core.size() < j->size(), true);
+			// 			CubeSet::iterator tmp = j;
+			// 			++j;
+			// 			fr.borderCubes.erase(tmp);
+			// 		} else {
+			// 			// cout << "normalp" << 0 << endl;
+			// 			++ckeep;
+			// 			++j;
+			// 		}
+			// 	}
+			// 	// cout << chrono::duration<double, std::milli>(chrono::steady_clock::now() - start).count()
+			// 	//      << endl;
+			// }
 			if (verbose > 1)
 				cout << i << " " << ckeep << " " << cprop << " " << cdrop << endl;
 			if (fr.borderCubes.empty())
 				return true;
 		}
 		// 3. simplify frames
-		for (size_t i = trivial ? k : 1; i <= k + 1; ++i)
-			frames[i].consecution->simplify();
+		// for (size_t i = trivial ? k : 1; i <= k + 1; ++i) {
+		// 	frames[i].consecution[0]->simplify();
+		// }
+		psimplify();
 		lifts->simplify();
 		return false;
 	}
@@ -930,6 +1358,8 @@ bool check(Model &model, int verbose, bool basic, bool random)
 {
 	if (!baseCases(model))
 		return false;
+	LitVec tmp;
+	model.isInitial(tmp);
 	IC3 ic3(model);
 	ic3.verbose = verbose;
 	if (basic) {

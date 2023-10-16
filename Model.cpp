@@ -228,6 +228,7 @@ bool Model::isInitial(const LitVec &latches)
 				return false;
 		return true;
 	} else {
+		terminate();
 		// a full SAT query
 		if (!inits) {
 			inits = newSolver();
