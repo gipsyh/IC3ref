@@ -156,6 +156,7 @@ class IC3 {
 		, nAbortMic(0)
 	{
 		slimLitOrder.heuristicLitOrder = &litOrder;
+		blockersOrder.heuristicLitOrder = &litOrder;
 
 		// construct lifting solver
 		lifts = model.newSolver();
@@ -210,6 +211,7 @@ class IC3 {
 
     private:
 	int verbose; // 0: silent, 1: stats, 2: all
+	bool branching, skipping_refer;
 	bool random;
 
 	string stringOfLitVec(const LitVec &vec)
@@ -376,11 +378,34 @@ class IC3 {
 	struct HeuristicLitOrder {
 		HeuristicLitOrder()
 			: _mini(1 << 20)
+			, _conflicts_num(0)
 		{
 		}
 		vector<float> counts;
 		size_t _mini;
+		size_t _conflicts_num;
+		float get_score(const Minisat::Lit &l)
+		{
+			size_t sz = (size_t)Minisat::toInt(Minisat::var(l));
+			if (sz >= counts.size())
+				return 0;
+			return counts[sz];
+		}
+
 		void count(const LitVec &cube)
+		{
+			_conflicts_num++;
+			assert(!cube.empty());
+			// assumes cube is ordered
+			size_t sz = (size_t)Minisat::toInt(Minisat::var(cube.back()));
+			if (sz >= counts.size())
+				counts.resize(sz + 1);
+			_mini = (size_t)Minisat::toInt(Minisat::var(cube[0]));
+			for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
+				counts[(size_t)Minisat::toInt(Minisat::var(*i))]++;
+		}
+
+		void decay_uc(const LitVec &cube)
 		{
 			assert(!cube.empty());
 			// assumes cube is ordered
@@ -389,7 +414,7 @@ class IC3 {
 				counts.resize(sz + 1);
 			_mini = (size_t)Minisat::toInt(Minisat::var(cube[0]));
 			for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
-				counts[(size_t)Minisat::toInt(Minisat::var(*i))] += 1;
+				counts[(size_t)Minisat::toInt(Minisat::var(*i))] -= 0;
 		}
 		void decay()
 		{
@@ -397,6 +422,31 @@ class IC3 {
 				counts[i] *= 0.99;
 		}
 	} litOrder;
+
+	struct BlockersOrder {
+		BlockersOrder()
+		{
+		}
+		HeuristicLitOrder *heuristicLitOrder;
+
+		float order_count(const Minisat::Lit &l) const
+		{
+			size_t i = (size_t)Minisat::toInt(Minisat::var(l));
+			if (i >= heuristicLitOrder->counts.size())
+				return 0;
+			return heuristicLitOrder->counts[i];
+		}
+
+		bool operator()(const LitVec a, const LitVec b) const
+		{
+			float score_a = 0, score_b = 0;
+			for (int i = 0; i < a.size(); i++) {
+				score_a += order_count(a[i]);
+				score_b += order_count(b[i]);
+			}
+			return score_a > score_b;
+		}
+	} blockersOrder;
 
 	struct SlimLitOrder {
 		HeuristicLitOrder *heuristicLitOrder;
@@ -427,10 +477,19 @@ class IC3 {
 		litOrder.count(cube);
 	}
 
-	// order according to preference
-	void orderCube(LitVec &cube)
+	void decayLitOrder(const LitVec &cube, size_t level)
 	{
+		litOrder.decay_uc(cube);
+	}
+
+	// order according to preference
+	void orderCube(LitVec &cube, bool rev = false)
+	{
+		if (!branching)
+			return;
 		stable_sort(cube.begin(), cube.end(), slimLitOrder);
+		if (rev)
+			reverse(cube.begin(), cube.end());
 	}
 
 	typedef Minisat::vec<Minisat::Lit> MSLitVec;
@@ -438,6 +497,8 @@ class IC3 {
 	// Orders assumptions for Minisat.
 	void orderAssumps(MSLitVec &cube, bool rev, int start = 0)
 	{
+		if (!branching)
+			return;
 		stable_sort(cube + start, cube + cube.size(), slimLitOrder);
 		if (rev)
 			reverse(cube + start, cube + cube.size());
@@ -492,7 +553,7 @@ class IC3 {
 				assumps.push(la);
 			}
 		}
-		orderAssumps(assumps, false, sz); // empirically found to be best choice
+		orderAssumps(assumps, true, sz); // empirically found to be best choice
 		// State s, inputs i, transition relation T, successor t:
 		//   s & i & T & ~t' is unsat
 		// Core assumptions reveal a lifting of s.
@@ -520,8 +581,8 @@ class IC3 {
 	// inductive and core is provided, extracts the unsat core.  If
 	// it's not inductive and pred is provided, extracts
 	// predecessor(s).
-	bool consecution(size_t fi, const LitVec &latches, size_t succ = 0, LitVec *core = NULL, size_t *pred = NULL,
-			 bool orderedCore = false)
+	bool consecution(size_t fi, const LitVec &latches, size_t succ = 0, LitVec *core = NULL,
+			 bool orderedCore = false, size_t *pred = NULL)
 	{
 		Frame &fr = frames[fi];
 		MSLitVec assumps, cls;
@@ -535,10 +596,12 @@ class IC3 {
 			assumps.push(*i); // push unprimed...
 		}
 		// ... order... (empirically found to best choice)
-		if (pred)
-			orderAssumps(assumps, false, 1);
-		else
-			orderAssumps(assumps, orderedCore, 1);
+		// if (pred)
+		//   orderAssumps(assumps, false, 1);
+		// else
+		//   orderAssumps(assumps, orderedCore, 1);
+		orderAssumps(assumps, true, 1);
+
 		// ... now prime
 		for (int i = 1; i < assumps.size(); ++i)
 			assumps[i] = model.primeLit(assumps[i]);
@@ -557,15 +620,16 @@ class IC3 {
 		}
 		// succeeds
 		if (core) {
-			if (pred && orderedCore) {
-				// redo with correctly ordered assumps
-				reverse(assumps + 1, assumps + assumps.size());
-				++nQuery;
-				startTimer(); // stats
-				rv = fr.consecution->solve(assumps);
-				assert(!rv);
-				endTimer(satTime);
-			}
+			// if (orderedCore) {
+			//   // redo with correctly ordered assumps
+			//   reverse(assumps + 1, assumps + assumps.size());
+			//   ++nQuery;
+			//   startTimer(); // stats
+			//   rv = fr.consecution->solve(assumps);
+			//   assert(!rv);
+			//   endTimer(satTime);
+			// }
+
 			for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
 				if (fr.consecution->conflict.has(~model.primeLit(*i)))
 					core->push_back(*i);
@@ -595,7 +659,7 @@ class IC3 {
 			if (recDepth > maxDepth) {
 				// quick check if recursion depth is exceeded
 				LitVec core;
-				bool rv = consecution(level, cube, 0, &core, NULL, true);
+				bool rv = consecution(level, cube, 0, &core);
 				if (rv && core.size() < cube.size()) {
 					++nCoreReduced; // stats
 					cube = core;
@@ -608,7 +672,7 @@ class IC3 {
 			state(cubeState).latches = cube;
 			size_t ctg;
 			LitVec core;
-			if (consecution(level, cube, cubeState, &core, &ctg, true)) {
+			if (consecution(level, cube, cubeState, &core, true, &ctg)) {
 				if (core.size() < cube.size()) {
 					++nCoreReduced; // stats
 					cube = core;
@@ -629,8 +693,8 @@ class IC3 {
 				// QUERY: generalize then push or vice versa?
 				while (j <= k && consecution(j, ctgCore))
 					++j;
-				mic(j - 1, ctgCore, recDepth + 1);
-				addCube(j, ctgCore);
+				bool mic_res = mic(j - 1, ctgCore, recDepth + 1);
+				addCube(j, ctgCore, mic_res ? (level - j + 1) : (level - j));
 			} else if (joins < maxJoins) {
 				// ran out of CTG attempts, so join instead
 				ctgs = 0;
@@ -657,17 +721,52 @@ class IC3 {
 		}
 	}
 
+	LitSet get_blocker(size_t level, LitVec &cube)
+	{
+		sort(cube.begin(), cube.end());
+		vector<LitVec> blockers;
+		int size = -1;
+		for (auto block_lemma : frames[level].borderCubes) {
+			if (size != -1 && size < block_lemma.size())
+				break;
+			if (includes(cube.begin(), cube.end(), block_lemma.begin(), block_lemma.end())) {
+				size = block_lemma.size();
+				blockers.emplace_back(block_lemma);
+			}
+		}
+		if (blockers.size() > 0) {
+			stable_sort(blockers.begin(), blockers.end(), blockersOrder);
+			return LitSet(blockers[0].begin(), blockers[0].end());
+		} else
+			return LitSet();
+	}
+
 	// Extracts minimal inductive (relative to level) subclause from
 	// ~cube --- at least that's where the name comes from.  With
 	// ctgDown, it's not quite a MIC anymore, but what's returned is
 	// inductive relative to the possibly modifed level.
-	void mic(size_t level, LitVec &cube, size_t recDepth)
+	bool mic(size_t level, LitVec &cube, size_t recDepth)
 	{
 		++nmic; // stats
 		// try dropping each literal in turn
 		size_t attempts = micAttempts;
+		LitSet refer = get_blocker(level, cube);
+		// ag
+		// for (auto block_lemma : frames[level].borderCubes) {
+		//   if (includes(cube.begin(), cube.end(), block_lemma.begin(), block_lemma.end())) {
+		//     if (consecution(level, block_lemma)) {
+		//       cube.swap(block_lemma);
+		//       return true;
+		//     }
+		//   }
+		// }
 		orderCube(cube);
 		for (size_t i = 0; i < cube.size();) {
+			if (skipping_refer)
+				if (refer.find(cube.at(i)) != refer.end()) {
+					i++;
+					continue;
+				}
 			LitVec cp(cube.begin(), cube.begin() + i);
 			cp.insert(cp.end(), cube.begin() + i + 1, cube.end());
 			if (ctgDown(level, cp, i, recDepth)) {
@@ -688,10 +787,15 @@ class IC3 {
 					// a low micAttempts, but does it improve overall
 					// performance?
 					++nAbortMic; // stats
-					return;
+					break;
 				}
 				++i;
 			}
+		}
+		if (cube.size() > refer.size()) {
+			return false;
+		} else {
+			return true;
 		}
 	}
 
@@ -705,7 +809,7 @@ class IC3 {
 
 	// Adds cube to frames at and below level, unless !toAll, in which
 	// case only to level.
-	void addCube(size_t level, LitVec &cube, bool toAll = true, bool silent = false)
+	void addCube(size_t level, LitVec &cube, int lvls, bool toAll = true, bool silent = false)
 	{
 		sort(cube.begin(), cube.end());
 		pair<CubeSet::iterator, bool> rv = frames[level].borderCubes.insert(cube);
@@ -720,8 +824,15 @@ class IC3 {
 			cls.push(~*i);
 		for (size_t i = toAll ? 1 : level; i <= level; ++i)
 			frames[i].consecution->addClause(cls);
-		if (toAll && !silent)
-			updateLitOrder(cube, level);
+
+		if (toAll) {
+			while (lvls > 0) {
+				updateLitOrder(cube, level);
+				lvls--;
+			}
+		}
+		// if (level == k + 1)
+		//   updateLitOrder(cube, level);
 	}
 
 	// ~cube was found to be inductive relative to level; now see if
@@ -729,12 +840,15 @@ class IC3 {
 	size_t generalize(size_t level, LitVec cube)
 	{
 		// generalize
-		mic(level, cube);
+		bool mic_res = mic(level, cube, 1);
+		int old_lvl = level;
+		if (!mic_res)
+			old_lvl++;
 		// push
 		do {
 			++level;
 		} while (level <= k && consecution(level, cube));
-		addCube(level, cube);
+		addCube(level, cube, level - old_lvl + 1);
 		return level;
 	}
 
@@ -749,7 +863,7 @@ class IC3 {
 			LitVec core;
 			size_t predi;
 			// Is the obligation fulfilled?
-			if (consecution(obl.level, state(obl.state).latches, obl.state, &core, &predi)) {
+			if (consecution(obl.level, state(obl.state).latches, obl.state, &core, true, &predi)) {
 				// Yes, so generalize and possibly produce a new obligation
 				// at a higher level.
 				obls.erase(obli);
@@ -834,7 +948,7 @@ class IC3 {
 				if (consecution(i, *j, 0, &core)) {
 					++cprop;
 					// only add to frame i+1 unless the core is reduced
-					addCube(i + 1, core, core.size() < j->size(), true);
+					addCube(i + 1, core, 1, core.size() < j->size(), true);
 					CubeSet::iterator tmp = j;
 					++j;
 					fr.borderCubes.erase(tmp);
@@ -932,6 +1046,8 @@ bool check(Model &model, int verbose, bool basic, bool random)
 		return false;
 	IC3 ic3(model);
 	ic3.verbose = verbose;
+	ic3.branching = true;
+	ic3.skipping_refer = true;
 	if (basic) {
 		ic3.maxDepth = 0;
 		ic3.maxJoins = 0;
