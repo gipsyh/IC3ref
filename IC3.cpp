@@ -161,6 +161,8 @@ class IC3 {
 		, n_diff_empty_success(0)
 		, n_fg_success(0)
 		, n_fg_fail(0)
+		, adv_success(0)
+		, adv_fail(0)
 	{
 		slimLitOrder.heuristicLitOrder = &litOrder;
 
@@ -669,6 +671,7 @@ class IC3 {
 	{
 		size_t ctgs = 0, joins = 0;
 		bool changed = false;
+		LitSet black_clone(black);
 		while (true) {
 			// induction check
 			if (!initiation(cube))
@@ -682,6 +685,7 @@ class IC3 {
 					cube = core;
 				}
 				if (!rv) {
+					black = black_clone;
 					for (int dj = 0; dj < diff.size(); ++dj) {
 						Minisat::Lit plit = model.primeLit(diff[dj]);
 						Minisat::lbool val = frames[level].consecution->modelValue(plit);
@@ -707,6 +711,7 @@ class IC3 {
 				return true;
 			}
 			if (!changed) {
+				black = black_clone;
 				for (int dj = 0; dj < diff.size(); ++dj) {
 					Minisat::Lit plit = model.primeLit(diff[dj]);
 					Minisat::lbool val = frames[level].consecution->modelValue(plit);
@@ -769,6 +774,8 @@ class IC3 {
 
 	int n_parent_found, n_eq_parent, n_diff_empty, n_diff_empty_success, n_fg_success, n_fg_fail;
 
+	int adv_success, adv_fail;
+
 	// Extracts minimal inductive (relative to level) subclause from
 	// ~cube --- at least that's where the name comes from.  With
 	// ctgDown, it's not quite a MIC anymore, but what's returned is
@@ -800,10 +807,14 @@ class IC3 {
 					// cout << "cube " << stringOfLitVec(ordered_cube) << endl;
 					// cout << "diff " << stringOfLitVec(diff) << endl;
 					set<Minisat::Lit> black;
+					int num_pred = 0;
 					if (diff.size()) {
 						for (int di = 0; di < diff.size(); ++di) {
 							if (black.find(diff[di]) != black.end())
 								continue;
+							num_pred += 1;
+							if (num_pred > 3)
+								break;
 							LitVec try_down = p;
 							int keep = try_down.size();
 							try_down.push_back(diff[di]);
