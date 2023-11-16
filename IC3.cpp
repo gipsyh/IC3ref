@@ -26,6 +26,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <set>
 #include <sys/times.h>
 #include <map>
+#include "signal.h"
 
 #include "IC3.h"
 #include "Solver.h"
@@ -126,6 +127,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //    unnecessary when both lifting-based and unsat core-based
 //    reduction are applied to a state, followed by mic before
 //    pushing.  The resulting cube is sufficiently small.
+
+int pl_success, pl_fail;
+int fp_success, fp_fail;
+int adv_success, adv_fail;
 
 namespace IC3
 {
@@ -780,16 +785,22 @@ class IC3 {
 		LitVec ordered_cube = cube;
 		sort(ordered_cube.begin(), ordered_cube.end());
 		vector<LitVec> parent = parents(level, ordered_cube);
+		bool fp = false;
 		if (parent.size()) {
 			n_parent_found += 1;
 			for (auto &p : parent)
 				if (ordered_cube == p) {
 					n_eq_parent += 1;
+					adv_success += 1;
 					return;
 				}
 			for (auto &p : parent) {
 				auto succ = frames[level].fail_push.find(p);
 				if (succ != frames[level].fail_push.end()) {
+					if (!fp) {
+						fp = true;
+						fp_success += 1;
+					}
 					LitVec diff;
 					for (auto &l : ordered_cube)
 						if (binary_search(succ->second.begin(), succ->second.end(), ~l))
@@ -811,9 +822,12 @@ class IC3 {
 							LitVec before = try_down;
 							if (ctgDown_fg(level, try_down, keep, recDepth, diff, black)) {
 								n_fg_success += 1;
+								pl_success += 1;
 								cube.swap(try_down);
+								adv_success += 1;
 								return;
 							}
+							pl_fail += 1;
 						}
 						n_fg_fail += 1;
 					} else {
@@ -822,8 +836,11 @@ class IC3 {
 						if (ctgDown(level, p, p.size(), recDepth + 1)) {
 							n_diff_empty_success += 1;
 							cube.swap(p);
+							adv_success += 1;
+							pl_success += 1;
 							return;
 						} else {
+							pl_fail += 1;
 							LitVec succ_state;
 							for (auto i = model.beginLatches(); i != model.endLatches();
 							     ++i) {
@@ -841,6 +858,9 @@ class IC3 {
 				}
 			}
 		}
+		if (!fp)
+			fp_fail += 1;
+		adv_fail += 1;
 		// try dropping each literal in turn
 		size_t attempts = micAttempts;
 		orderCube(cube);
@@ -1145,11 +1165,27 @@ bool baseCases(Model &model)
 	return true;
 }
 
+void statistic()
+{
+	cout << ". # pl_success:  " << pl_success << " # pl_fail:  " << pl_fail << endl;
+	cout << ". # fp_success:  " << fp_success << " # fp_fail:  " << fp_fail << endl;
+	cout << ". # adv_success:  " << adv_success << " # adv_fail:  " << adv_fail << endl;
+}
+
+static void handle_int(int int_num)
+{
+	statistic();
+	exit(0);
+}
+
 // External function to make the magic happen.
 bool check(Model &model, int verbose, bool basic, bool random)
 {
-	if (!baseCases(model))
+	signal(SIGINT, handle_int);
+	if (!baseCases(model)) {
+		statistic();
 		return false;
+	}
 	IC3 ic3(model);
 	ic3.verbose = verbose;
 	if (basic) {
@@ -1164,8 +1200,9 @@ bool check(Model &model, int verbose, bool basic, bool random)
 		ic3.printWitness();
 	if (verbose)
 		ic3.printStats();
-	ic3.verbose = true;
-	ic3.printStats();
+	// ic3.verbose = true;
+	// ic3.printStats();
+	statistic();
 	return rv;
 }
 
