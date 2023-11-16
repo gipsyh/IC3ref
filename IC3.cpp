@@ -25,6 +25,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <iostream>
 #include <set>
 #include <sys/times.h>
+#include <map>
 
 #include "IC3.h"
 #include "Solver.h"
@@ -154,6 +155,12 @@ class IC3 {
 		, nCoreReduced(0)
 		, nAbortJoin(0)
 		, nAbortMic(0)
+		, n_parent_found(0)
+		, n_eq_parent(0)
+		, n_diff_empty(0)
+		, n_diff_empty_success(0)
+		, n_fg_success(0)
+		, n_fg_fail(0)
 	{
 		slimLitOrder.heuristicLitOrder = &litOrder;
 		blockersOrder.heuristicLitOrder = &litOrder;
@@ -346,6 +353,7 @@ class IC3 {
 		size_t k; // steps from initial state
 		CubeSet borderCubes; // additional cubes in this and previous frames
 		Minisat::Solver *consecution;
+		map<LitVec, LitVec> fail_push;
 	};
 	vector<Frame> frames;
 
@@ -721,6 +729,98 @@ class IC3 {
 		}
 	}
 
+	bool ctgDown_fg(size_t level, LitVec &cube, size_t keepTo, size_t recDepth, LitVec &diff, LitSet &black)
+	{
+		size_t ctgs = 0, joins = 0;
+		bool changed = false;
+		LitSet black_clone(black);
+		while (true) {
+			// induction check
+			if (!initiation(cube))
+				return false;
+			if (recDepth > maxDepth) {
+				// quick check if recursion depth is exceeded
+				LitVec core;
+				bool rv = consecution(level, cube, 0, &core);
+				if (rv && core.size() < cube.size()) {
+					++nCoreReduced; // stats
+					cube = core;
+				}
+				if (!rv) {
+					black = black_clone;
+					for (int dj = 0; dj < diff.size(); ++dj) {
+						Minisat::Lit plit = model.primeLit(diff[dj]);
+						Minisat::lbool val = frames[level].consecution->modelValue(plit);
+						if (val != Minisat::l_False)
+							black.insert(diff[dj]);
+					}
+				}
+				return rv;
+			}
+			// prepare to obtain CTG
+			size_t cubeState = newState();
+			state(cubeState).successor = 0;
+			state(cubeState).latches = cube;
+			size_t ctg;
+			LitVec core;
+			if (consecution(level, cube, cubeState, &core, true, &ctg)) {
+				if (core.size() < cube.size()) {
+					++nCoreReduced; // stats
+					cube = core;
+				}
+				// inductive, so clean up
+				delState(cubeState);
+				return true;
+			}
+			if (!changed) {
+				for (int dj = 0; dj < diff.size(); ++dj) {
+					Minisat::Lit plit = model.primeLit(diff[dj]);
+					Minisat::lbool val = frames[level].consecution->modelValue(plit);
+					if (val != Minisat::l_False)
+						black.insert(diff[dj]);
+				}
+			}
+			// not inductive, address interfering CTG
+			LitVec ctgCore;
+			bool ret = false;
+			if (ctgs < maxCTGs && level > 1 && initiation(state(ctg).latches) &&
+			    consecution(level - 1, state(ctg).latches, cubeState, &ctgCore)) {
+				// CTG is inductive relative to level-1; push forward and generalize
+				++nCTG; // stats
+				++ctgs;
+				size_t j = level;
+				// QUERY: generalize then push or vice versa?
+				while (j <= k && consecution(j, ctgCore))
+					++j;
+				bool mic_res = mic(j - 1, ctgCore, recDepth + 1);
+				addCube(j, ctgCore, mic_res ? (level - j + 1) : (level - j));
+			} else if (joins < maxJoins) {
+				changed = true;
+				// ran out of CTG attempts, so join instead
+				ctgs = 0;
+				++joins;
+				LitVec tmp;
+				for (size_t i = 0; i < cube.size(); ++i)
+					if (binary_search(state(ctg).latches.begin(), state(ctg).latches.end(),
+							  cube[i]))
+						tmp.push_back(cube[i]);
+					else if (i < keepTo) {
+						// previously failed when this literal was dropped
+						++nAbortJoin; // stats
+						ret = true;
+						break;
+					}
+				cube = tmp; // enlarged cube
+			} else
+				ret = true;
+			// clean up
+			delState(cubeState);
+			delState(ctg);
+			if (ret)
+				return false;
+		}
+	}
+
 	LitSet get_blocker(size_t level, LitVec &cube)
 	{
 		sort(cube.begin(), cube.end());
@@ -741,6 +841,20 @@ class IC3 {
 			return LitSet();
 	}
 
+	vector<LitVec> parents(size_t level, LitVec &cube)
+	{
+		vector<LitVec> res;
+		if (level == 0)
+			return res;
+		for (auto &block_lemma : frames[level].borderCubes) {
+			if (includes(cube.begin(), cube.end(), block_lemma.begin(), block_lemma.end()))
+				res.emplace_back(block_lemma);
+		}
+		return res;
+	}
+
+	int n_parent_found, n_eq_parent, n_diff_empty, n_diff_empty_success, n_fg_success, n_fg_fail;
+
 	// Extracts minimal inductive (relative to level) subclause from
 	// ~cube --- at least that's where the name comes from.  With
 	// ctgDown, it's not quite a MIC anymore, but what's returned is
@@ -748,6 +862,75 @@ class IC3 {
 	bool mic(size_t level, LitVec &cube, size_t recDepth)
 	{
 		++nmic; // stats
+
+		LitVec ordered_cube = cube;
+		sort(ordered_cube.begin(), ordered_cube.end());
+		vector<LitVec> parent = parents(level, ordered_cube);
+		if (parent.size()) {
+			n_parent_found += 1;
+			for (auto &p : parent)
+				if (ordered_cube == p) {
+					n_eq_parent += 1;
+					return true;
+				}
+			for (auto &p : parent) {
+				size_t p_size = p.size();
+				auto succ = frames[level].fail_push.find(p);
+				if (succ != frames[level].fail_push.end()) {
+					LitVec diff;
+					for (auto &l : ordered_cube)
+						if (binary_search(succ->second.begin(), succ->second.end(), ~l))
+							diff.push_back(l);
+					orderCube(diff);
+					reverse(diff.begin(), diff.end());
+					// cout << "p " << stringOfLitVec(p) << endl;
+					// cout << "cube " << stringOfLitVec(ordered_cube) << endl;
+					// cout << "diff " << stringOfLitVec(diff) << endl;
+					set<Minisat::Lit> black;
+					if (diff.size()) {
+						for (int di = 0; di < diff.size(); ++di) {
+							if (black.find(diff[di]) != black.end())
+								continue;
+							LitVec try_down = p;
+							int keep = try_down.size();
+							try_down.push_back(diff[di]);
+							// cout << "try before " << stringOfLitVec(try_down) << endl;
+							LitVec before = try_down;
+							if (ctgDown_fg(level, try_down, keep, recDepth, diff, black)) {
+								// cout << "success" << endl;
+								n_fg_success += 1;
+								cube.swap(try_down);
+								return cube.size() <= p_size;
+							}
+							// cout << "fail" << endl;
+						}
+						n_fg_fail += 1;
+					} else {
+						n_diff_empty += 1;
+
+						if (ctgDown(level, p, p.size(), recDepth + 1)) {
+							n_diff_empty_success += 1;
+							cube.swap(p);
+							return cube.size() <= p_size;
+						} else {
+							LitVec succ_state;
+							for (auto i = model.beginLatches(); i != model.endLatches();
+							     ++i) {
+								Var pvar = model.primeVar(*i);
+								Minisat::lbool val =
+									frames[level].consecution->modelValue(
+										pvar.var());
+								if (val != Minisat::l_Undef)
+									succ_state.push_back(
+										i->lit(val == Minisat::l_False));
+							}
+							frames[level].fail_push[p] = succ_state;
+						}
+					}
+				}
+			}
+		}
+
 		// try dropping each literal in turn
 		size_t attempts = micAttempts;
 		LitSet refer = get_blocker(level, cube);
@@ -848,11 +1031,35 @@ class IC3 {
 		do {
 			++level;
 		} while (level <= k && consecution(level, cube));
+		if (level <= k) {
+			LitVec succ_state;
+			for (auto i = model.beginLatches(); i != model.endLatches(); ++i) {
+				Var pvar = model.primeVar(*i);
+				Minisat::lbool val = frames[level].consecution->modelValue(pvar.var());
+				if (val != Minisat::l_Undef)
+					succ_state.push_back(i->lit(val == Minisat::l_False));
+			}
+			sort(cube.begin(), cube.end());
+			frames[level].fail_push[cube] = succ_state;
+		}
 		addCube(level, cube, level - old_lvl + 1);
 		return level;
 	}
 
 	size_t cexState; // beginning of counterexample trace
+
+	bool trivial_contained(size_t level, LitVec &cube)
+	{
+		LitVec cp = cube;
+		sort(cp.begin(), cp.end());
+		for (size_t l = level; l <= k + 1; ++l) {
+			for (auto &lemma : frames[l].borderCubes) {
+				if (includes(cp.begin(), cp.end(), lemma.begin(), lemma.end()))
+					return true;
+			}
+		}
+		return false;
+	}
 
 	// Process obligations according to priority.
 	bool handleObligations(PriorityQueue obls)
@@ -860,6 +1067,10 @@ class IC3 {
 		while (!obls.empty()) {
 			PriorityQueue::iterator obli = obls.begin();
 			Obligation obl = *obli;
+			if (trivial_contained(obl.level + 1, state(obl.state).latches)) {
+				obls.erase(obli);
+				continue;
+			}
 			LitVec core;
 			size_t predi;
 			// Is the obligation fulfilled?
@@ -943,6 +1154,7 @@ class IC3 {
 		for (size_t i = trivial ? k : 1; i <= k; ++i) {
 			int ckeep = 0, cprop = 0, cdrop = 0;
 			Frame &fr = frames[i];
+			fr.fail_push.clear();
 			for (CubeSet::iterator j = fr.borderCubes.begin(); j != fr.borderCubes.end();) {
 				LitVec core;
 				if (consecution(i, *j, 0, &core)) {
@@ -953,6 +1165,14 @@ class IC3 {
 					++j;
 					fr.borderCubes.erase(tmp);
 				} else {
+					LitVec succ_state;
+					for (auto i = model.beginLatches(); i != model.endLatches(); ++i) {
+						Var pvar = model.primeVar(*i);
+						Minisat::lbool val = fr.consecution->modelValue(pvar.var());
+						if (val != Minisat::l_Undef)
+							succ_state.push_back(i->lit(val == Minisat::l_False));
+					}
+					fr.fail_push[*j] = succ_state;
 					++ckeep;
 					++j;
 				}
@@ -1007,6 +1227,12 @@ class IC3 {
 		cout << ". # Red. cores: " << nCoreReduced << endl;
 		cout << ". # Int. joins: " << nAbortJoin << endl;
 		cout << ". # Int. mics:  " << nAbortMic << endl;
+		cout << ". # n_parent_found:  " << n_parent_found << endl;
+		cout << ". # n_eq_parent:  " << n_eq_parent << endl;
+		cout << ". # n_diff_empty:  " << n_diff_empty << endl;
+		cout << ". # n_diff_empty_success:  " << n_diff_empty_success << endl;
+		cout << ". # n_fg_success:  " << n_fg_success << endl;
+		cout << ". # n_fg_fail:  " << n_fg_fail << endl;
 		if (numUpdates)
 			cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
 	}
@@ -1060,6 +1286,8 @@ bool check(Model &model, int verbose, bool basic, bool random)
 		ic3.printWitness();
 	if (verbose)
 		ic3.printStats();
+	ic3.verbose = true;
+	ic3.printStats();
 	return rv;
 }
 
