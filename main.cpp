@@ -30,12 +30,13 @@ extern "C" {
 }
 #include "IC3.h"
 #include "Model.h"
+#include "transys.h"
 
 int main(int argc, char **argv)
 {
-	unsigned int propertyIndex = 0;
-	bool basic = false, random = false;
+	bool basic = true, random = false;
 	int verbose = 0;
+	string aig_file;
 	for (int i = 1; i < argc; ++i) {
 		if (string(argv[i]) == "-v")
 			// option: verbosity
@@ -52,26 +53,12 @@ int main(int argc, char **argv)
 			// option: use basic generalization
 			basic = true;
 		else
-			// optional argument: set property index
-			propertyIndex = (unsigned)atoi(argv[i]);
+			aig_file = string(argv[i]);
 	}
 
-	// read AIGER model
-	aiger *aig = aiger_init();
-	const char *msg = aiger_read_from_file(aig, stdin);
-	if (msg) {
-		cout << msg << endl;
-		return 0;
-	}
-	// create the Model from the obtained aig
-	Model *model = modelFromAiger(aig, propertyIndex);
-	aiger_reset(aig);
-	if (!model)
-		return 0;
+	Transys *model = new Transys(aig_file.c_str());
 
-	// model check it
 	bool rv = IC3::check(*model, verbose, basic, random);
-	// print 0/1 according to AIGER standard
 	cout << !rv << endl;
 
 	delete model;

@@ -6,12 +6,16 @@ set(CMAKE_CXX_STANDARD 11)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -D__STDC_LIMIT_MACROS -D__STDC_FORMAT_MACROS -O3 -g -fpermissive")
 
-add_library(ic3ref IC3.cpp aiger/aiger.c Model.cpp)
+add_library(ic3ref IC3.cpp aiger/aiger.c)
 target_include_directories(ic3ref PUBLIC aiger minisat minisat/minisat/core minisat/minisat/simp
                                         minisat/minisat/mtl)
 
 add_subdirectory(minisat)
-target_link_libraries(ic3ref PUBLIC minisat-lib-shared)
+add_subdirectory(${CMAKE_SOURCE_DIR}/../transys/cpp ${CMAKE_CURRENT_BINARY_DIR}/transys)
+add_subdirectory(${CMAKE_SOURCE_DIR}/../gipsat/cpp ${CMAKE_CURRENT_BINARY_DIR}/gipsat)
+add_subdirectory(${CMAKE_SOURCE_DIR}/../giputils/cpp ${CMAKE_CURRENT_BINARY_DIR}/giputils)
+
+target_link_libraries(ic3ref PUBLIC minisat-lib-shared Transys GipSAT giputils)
 
 add_executable(ic3refmain main.cpp)
 target_link_libraries(ic3refmain PUBLIC ic3ref)
