@@ -11,10 +11,7 @@ target_include_directories(ic3ref PUBLIC aiger minisat minisat/minisat/core mini
                                         minisat/minisat/mtl)
 
 add_subdirectory(minisat)
-target_link_libraries(ic3ref PUBLIC minisat-lib-shared)
-
-add_subdirectory(cryptominisat)
-target_link_libraries(ic3ref PUBLIC cryptominisat5)
+target_link_libraries(ic3ref PUBLIC minisat-lib-shared ${PROJECT_SOURCE_DIR}/cadical/build/libcadical.a)
 
 add_executable(ic3refmain main.cpp)
 target_link_libraries(ic3refmain PUBLIC ic3ref)

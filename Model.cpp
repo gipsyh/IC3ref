@@ -69,9 +69,9 @@ const Var &Model::primeVar(const Var &v, Minisat::SimpSolver *slv)
 	return vars[index];
 }
 
-ToCMsat::Solver *Model::newSolver() const
+Tocadical::Solver *Model::newSolver() const
 {
-	ToCMsat::Solver *slv = new ToCMsat::Solver();
+	Tocadical::Solver *slv = new Tocadical::Solver();
 	// load all variables to maintain alignment
 	for (size_t i = 0; i < vars.size(); ++i) {
 		Minisat::Var nv = slv->newVar();
@@ -80,7 +80,7 @@ ToCMsat::Solver *Model::newSolver() const
 	return slv;
 }
 
-void Model::loadTransitionRelation(ToCMsat::Solver &slv, bool primeConstraints)
+void Model::loadTransitionRelation(Tocadical::Solver &slv, bool primeConstraints)
 {
 	if (!sslv) {
 		// create a simplified CNF version of (this slice of) the TR
@@ -172,7 +172,7 @@ void Model::loadTransitionRelation(ToCMsat::Solver &slv, bool primeConstraints)
 			slv.addClause(primeLit(*i));
 }
 
-void Model::loadInitialCondition(ToCMsat::Solver &slv) const
+void Model::loadInitialCondition(Tocadical::Solver &slv) const
 {
 	slv.addClause(btrue());
 	for (LitVec::const_iterator i = init.begin(); i != init.end(); ++i)
@@ -198,7 +198,7 @@ void Model::loadInitialCondition(ToCMsat::Solver &slv) const
 		slv.addClause(*i);
 }
 
-void Model::loadError(ToCMsat::Solver &slv) const
+void Model::loadError(Tocadical::Solver &slv) const
 {
 	LitSet require; // unprimed formulas
 	require.insert(_error);

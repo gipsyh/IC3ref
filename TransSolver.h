@@ -1,22 +1,16 @@
 #ifndef TRANSSOLVER_H_INCLUDED
 #define TRANSSOLVER_H_INCLUDED
 
-#include "cryptominisat/src/cryptominisat.h"
+#include "cadical/src/internal.hpp"
 #include "minisat/core/SolverTypes.h"
 #include "minisat/mtl/Vec.h"
-#include <assert.h>
-#include <vector>
-#include <algorithm>
-#include <unordered_set>
 
-using std::vector;
-
-namespace ToCMsat
+namespace Tocadical
 {
 
+typedef int Var;
 typedef Minisat::Lit Lit;
 typedef Minisat::lbool lbool;
-typedef int Var;
 
 class Solver {
     public:
@@ -35,12 +29,12 @@ class Solver {
 	lbool modelValue(Var x) const;
 	void releaseVar(Lit p);
 	bool has(Lit p);
+	int getLit(Lit p);
 	int nVars();
-	CMSat::Lit litchange(Lit p);
 
     private:
-	CMSat::SATSolver *slv;
-	std::unordered_set<int> *core;
+	CaDiCaL::Solver *slv;
+	int next_var;
 };
 
 }

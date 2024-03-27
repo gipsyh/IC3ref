@@ -242,7 +242,7 @@ class Model {
 
 	// Creates a Solver and initializes its variables to maintain
 	// alignment with the Model's variables.
-	ToCMsat::Solver *newSolver() const;
+	Tocadical::Solver *newSolver() const;
 
 	// Loads the TR into the solver.  Also loads the primed error
 	// definition such that Model::primedError() need only be asserted
@@ -250,12 +250,12 @@ class Model {
 	// negation of the error are always added --- except that the primed
 	// form of the invariant constraints are not asserted if
 	// !primeConstraints.
-	void loadTransitionRelation(ToCMsat::Solver &slv, bool primeConstraints = true);
+	void loadTransitionRelation(Tocadical::Solver &slv, bool primeConstraints = true);
 	// Loads the initial condition into the solver.
-	void loadInitialCondition(ToCMsat::Solver &slv) const;
+	void loadInitialCondition(Tocadical::Solver &slv) const;
 	// Loads the error into the solver, which is only necessary for the
 	// 0-step base case of IC3.
-	void loadError(ToCMsat::Solver &slv) const;
+	void loadError(Tocadical::Solver &slv) const;
 
 	// Use this method to allow the Model to decide how best to decide
 	// if a cube has an initial state.
@@ -278,7 +278,7 @@ class Model {
 	typedef unordered_map<TRMapKey, Minisat::SimpSolver *> TRMap;
 	TRMap trmap;
 
-	ToCMsat::Solver *inits;
+	Tocadical::Solver *inits;
 	LitSet initLits;
 
 	Minisat::SimpSolver *sslv;

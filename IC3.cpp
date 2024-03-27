@@ -344,11 +344,11 @@ class IC3 {
 	struct Frame {
 		size_t k; // steps from initial state
 		CubeSet borderCubes; // additional cubes in this and previous frames
-		ToCMsat::Solver *consecution;
+		Tocadical::Solver *consecution;
 	};
 	vector<Frame> frames;
 
-	ToCMsat::Solver *lifts;
+	Tocadical::Solver *lifts;
 	Minisat::Lit notInvConstraints;
 
 	// Push a new Frame.
@@ -500,7 +500,7 @@ class IC3 {
 		assert(!rv);
 		// obtain lifted latch set from unsat core
 		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-			if (lifts->has(~*i))
+			if (lifts->has(*i))
 				state(st).latches.push_back(*i); // record lifted latches
 		// deactivate negation of successor
 		lifts->releaseVar(~act);
@@ -564,7 +564,7 @@ class IC3 {
 				endTimer(satTime);
 			}
 			for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-				if (fr.consecution->has(~model.primeLit(*i)))
+				if (fr.consecution->has(model.primeLit(*i)))
 					core->push_back(*i);
 			if (!initiation(*core))
 				*core = latches;
@@ -897,7 +897,7 @@ class IC3 {
 // separately.
 bool baseCases(Model &model)
 {
-	ToCMsat::Solver *base0 = model.newSolver();
+	Tocadical::Solver *base0 = model.newSolver();
 	model.loadInitialCondition(*base0);
 	model.loadError(*base0);
 	bool rv = base0->solve(model.error());
@@ -905,7 +905,7 @@ bool baseCases(Model &model)
 	if (rv)
 		return false;
 
-	ToCMsat::Solver *base1 = model.newSolver();
+	Tocadical::Solver *base1 = model.newSolver();
 	model.loadInitialCondition(*base1);
 	model.loadTransitionRelation(*base1);
 	rv = base1->solve(model.primedError());
