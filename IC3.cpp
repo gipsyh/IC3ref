@@ -25,6 +25,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <iostream>
 #include <set>
 #include <sys/times.h>
+#include <signal.h>
 
 #include "IC3.h"
 #include "Solver.h"
@@ -34,6 +35,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 namespace IC3
 {
+
+GipSAT *glabol_gipsat;
 
 class IC3 {
     public:
@@ -62,6 +65,7 @@ class IC3 {
 	{
 		slimLitOrder.heuristicLitOrder = &litOrder;
 		gipsat = new GipSAT(model);
+		glabol_gipsat = gipsat;
 		gipsat->extend();
 	}
 	~IC3()
@@ -606,12 +610,21 @@ class IC3 {
 	}
 };
 
+static void handle_int(int int_num)
+{
+	glabol_gipsat->statistic();
+	exit(0);
+}
+
 // External function to make the magic happen.
 bool check(Transys &model, int verbose, bool basic, bool random)
 {
+	signal(SIGINT, handle_int);
 	IC3 ic3(model);
-	if (!ic3.baseCases())
+	if (!ic3.baseCases()) {
+		ic3.gipsat->statistic();
 		return false;
+	}
 
 	ic3.verbose = verbose;
 	if (basic) {
@@ -624,6 +637,7 @@ bool check(Transys &model, int verbose, bool basic, bool random)
 	bool rv = ic3.check();
 	if (verbose)
 		ic3.printStats();
+	ic3.gipsat->statistic();
 	return rv;
 }
 
