@@ -25,6 +25,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <iostream>
 #include <set>
 #include <sys/times.h>
+#include <signal.h>
 
 #include "IC3.h"
 #include "Solver.h"
@@ -925,11 +926,24 @@ bool baseCases(Model &model)
 	return true;
 }
 
+static void statistic()
+{
+}
+
+static void handle_int(int int_num)
+{
+	statistic();
+	exit(0);
+}
+
 // External function to make the magic happen.
 bool check(Model &model, int verbose, bool basic, bool random)
 {
-	if (!baseCases(model))
+	signal(SIGINT, handle_int);
+	if (!baseCases(model)) {
+		statistic();
 		return false;
+	}
 	IC3 ic3(model);
 	ic3.verbose = verbose;
 	if (basic) {
@@ -940,6 +954,7 @@ bool check(Model &model, int verbose, bool basic, bool random)
 	if (random)
 		ic3.random = true;
 	bool rv = ic3.check();
+	statistic();
 	if (!rv && verbose > 1)
 		ic3.printWitness();
 	if (verbose)
