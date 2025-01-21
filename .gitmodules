@@ -4,3 +4,6 @@
 [submodule "minisat"]
 	path = minisat
 	url = git@github.com:gipsyh/minisat.git
+[submodule "cadical"]
+	path = cadical
+	url = git@github.com:arminbiere/cadical.git

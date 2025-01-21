@@ -30,6 +30,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "IC3.h"
 #include "Solver.h"
 #include "Vec.h"
+#include "TransSolver.h"
 
 // A reference implementation of IC3, i.e., one that is meant to be
 // read and used as a starting point for tuning, extending, and
@@ -344,11 +345,11 @@ class IC3 {
 	struct Frame {
 		size_t k; // steps from initial state
 		CubeSet borderCubes; // additional cubes in this and previous frames
-		Minisat::Solver *consecution;
+		Tocadical::Solver *consecution;
 	};
 	vector<Frame> frames;
 
-	Minisat::Solver *lifts;
+	Tocadical::Solver *lifts;
 	Minisat::Lit notInvConstraints;
 
 	// Push a new Frame.
@@ -359,10 +360,6 @@ class IC3 {
 			Frame &fr = frames.back();
 			fr.k = frames.size() - 1;
 			fr.consecution = model.newSolver();
-			if (random) {
-				fr.consecution->random_seed = rand();
-				fr.consecution->rnd_init_act = true;
-			}
 			if (fr.k == 0)
 				model.loadInitialCondition(*fr.consecution);
 			model.loadTransitionRelation(*fr.consecution);
@@ -504,7 +501,7 @@ class IC3 {
 		assert(!rv);
 		// obtain lifted latch set from unsat core
 		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-			if (lifts->conflict.has(~*i))
+			if (lifts->has(*i))
 				state(st).latches.push_back(*i); // record lifted latches
 		// deactivate negation of successor
 		lifts->releaseVar(~act);
@@ -568,7 +565,7 @@ class IC3 {
 				endTimer(satTime);
 			}
 			for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-				if (fr.consecution->conflict.has(~model.primeLit(*i)))
+				if (fr.consecution->has(model.primeLit(*i)))
 					core->push_back(*i);
 			if (!initiation(*core))
 				*core = latches;
@@ -905,7 +902,7 @@ class IC3 {
 // separately.
 bool baseCases(Model &model)
 {
-	Minisat::Solver *base0 = model.newSolver();
+	Tocadical::Solver *base0 = model.newSolver();
 	model.loadInitialCondition(*base0);
 	model.loadError(*base0);
 	bool rv = base0->solve(model.error());
@@ -913,7 +910,7 @@ bool baseCases(Model &model)
 	if (rv)
 		return false;
 
-	Minisat::Solver *base1 = model.newSolver();
+	Tocadical::Solver *base1 = model.newSolver();
 	model.loadInitialCondition(*base1);
 	model.loadTransitionRelation(*base1);
 	rv = base1->solve(model.primedError());
