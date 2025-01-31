@@ -219,26 +219,12 @@ void Model::loadError(Minisat::Solver &slv) const
 
 bool Model::isInitial(const LitVec &latches)
 {
-	if (constraints.empty()) {
-		// an intersection check (AIGER 1.9 w/o invariant constraints)
-		if (initLits.empty())
-			initLits.insert(init.begin(), init.end());
-		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-			if (initLits.find(~*i) != initLits.end())
-				return false;
-		return true;
-	} else {
-		// a full SAT query
-		if (!inits) {
-			inits = newSolver();
-			loadInitialCondition(*inits);
-		}
-		Minisat::vec<Minisat::Lit> assumps;
-		assumps.capacity(latches.size());
-		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-			assumps.push(*i);
-		return inits->solve(assumps);
-	}
+	if (initLits.empty())
+		initLits.insert(init.begin(), init.end());
+	for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
+		if (initLits.find(~*i) != initLits.end())
+			return false;
+	return true;
 }
 
 // Creates a named variable.

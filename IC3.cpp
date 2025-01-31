@@ -30,6 +30,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "IC3.h"
 #include "Solver.h"
 #include "Vec.h"
+#include "transys.h"
+#include "gipsat.h"
 
 // A reference implementation of IC3, i.e., one that is meant to be
 // read and used as a starting point for tuning, extending, and
@@ -130,13 +132,14 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 namespace IC3
 {
 
+GipSAT *glabol_gipsat;
+
 class IC3 {
     public:
-	IC3(Model &_model)
+	IC3(Transys &_model)
 		: verbose(0)
 		, random(false)
 		, model(_model)
-		, k(1)
 		, nextState(0)
 		, litOrder()
 		, slimLitOrder()
@@ -157,55 +160,27 @@ class IC3 {
 		, nAbortMic(0)
 	{
 		slimLitOrder.heuristicLitOrder = &litOrder;
-
-		// construct lifting solver
-		lifts = model.newSolver();
-		// don't assert primed invariant constraints
-		model.loadTransitionRelation(*lifts, false);
-		// assert notInvConstraints (in stateOf) when lifting
-		notInvConstraints = Minisat::mkLit(lifts->newVar());
-		Minisat::vec<Minisat::Lit> cls;
-		cls.push(~notInvConstraints);
-		for (LitVec::const_iterator i = model.invariantConstraints().begin();
-		     i != model.invariantConstraints().end(); ++i)
-			cls.push(model.primeLit(~*i));
-		lifts->addClause_(cls);
+		gipsat = new GipSAT(model);
+		glabol_gipsat = gipsat;
+		gipsat->extend();
 	}
 	~IC3()
 	{
-		for (vector<Frame>::const_iterator i = frames.begin(); i != frames.end(); ++i)
-			if (i->consecution)
-				delete i->consecution;
-		delete lifts;
+		delete gipsat;
 	}
 
 	// The main loop.
 	bool check()
 	{
 		startTime = time(); // stats
+		extend();
 		while (true) {
-			if (verbose > 1)
-				cout << "Level " << k << endl;
-			extend(); // push frontier frame
 			if (!strengthen())
-				return false; // strengthen to remove bad successors
+				return false;
+			extend();
 			if (propagate())
-				return true; // propagate clauses; check for proof
+				return true;
 			printStats();
-			++k; // increment frontier
-		}
-	}
-
-	// Follows and prints chain of states from cexState forward.
-	void printWitness()
-	{
-		if (cexState != 0) {
-			size_t curr = cexState;
-			while (curr) {
-				cout << stringOfLitVec(state(curr).inputs) << stringOfLitVec(state(curr).latches)
-				     << endl;
-				curr = state(curr).successor;
-			}
 		}
 	}
 
@@ -213,16 +188,7 @@ class IC3 {
 	int verbose; // 0: silent, 1: stats, 2: all
 	bool random;
 
-	string stringOfLitVec(const LitVec &vec)
-	{
-		stringstream ss;
-		for (LitVec::const_iterator i = vec.begin(); i != vec.end(); ++i)
-			ss << model.stringOfLit(*i) << " ";
-		return ss.str();
-	}
-
-	Model &model;
-	size_t k;
+	Transys &model;
 
 	// The State structures are for tracking trees of (lifted) CTIs.
 	// Because States are created frequently, I want to avoid dynamic
@@ -340,25 +306,21 @@ class IC3 {
 	};
 	typedef set<Obligation, ObligationComp> PriorityQueue;
 
-	// For IC3's overall frame structure.
 	struct Frame {
 		size_t k; // steps from initial state
 		CubeSet borderCubes; // additional cubes in this and previous frames
-		Minisat::Solver *consecution;
+		GipSAT *consecution;
 	};
 	vector<Frame> frames;
-
+	
 	Minisat::Solver *lifts;
-	Minisat::Lit notInvConstraints;
-
-	// Push a new Frame.
 	void extend()
 	{
 		while (frames.size() < k + 2) {
 			frames.resize(frames.size() + 1);
 			Frame &fr = frames.back();
 			fr.k = frames.size() - 1;
-			fr.consecution = model.newSolver();
+			fr.consecution = new GipSAT(model);
 			if (random) {
 				fr.consecution->random_seed = rand();
 				fr.consecution->rnd_init_act = true;
@@ -369,11 +331,6 @@ class IC3 {
 		}
 	}
 
-	// Structure and methods for imposing priorities on literals
-	// through ordering the dropping of literals in mic (drop leftmost
-	// literal first) and assumptions to Minisat.  The implemented
-	// ordering prefers to keep literals that appear frequently in
-	// addCube() calls.
 	struct HeuristicLitOrder {
 		HeuristicLitOrder()
 			: _mini(1 << 20)
@@ -437,143 +394,65 @@ class IC3 {
 	typedef Minisat::vec<Minisat::Lit> MSLitVec;
 
 	// Orders assumptions for Minisat.
-	void orderAssumps(MSLitVec &cube, bool rev, int start = 0)
+	void orderAssumps(LitVec &cube, bool rev, int start = 0)
 	{
-		stable_sort(cube + start, cube + cube.size(), slimLitOrder);
+		stable_sort(cube.begin() + start, cube.begin() + cube.size(), slimLitOrder);
 		if (rev)
-			reverse(cube + start, cube + cube.size());
+			reverse(cube.begin() + start, cube.begin() + cube.size());
 	}
 
-	// Assumes that last call to fr.consecution->solve() was
-	// satisfiable.  Extracts state(s) cube from satisfying
-	// assignment.
-	size_t stateOf(Frame &fr, size_t succ = 0)
+	size_t stateOf(size_t succ = 0)
 	{
-		// create state
 		size_t st = newState();
 		state(st).successor = succ;
-		MSLitVec assumps;
-		assumps.capacity(1 + 2 * (model.endInputs() - model.beginInputs()) +
-				 (model.endLatches() - model.beginLatches()));
-		Minisat::Lit act = Minisat::mkLit(lifts->newVar()); // activation literal
-		assumps.push(act);
-		Minisat::vec<Minisat::Lit> cls;
-		cls.push(~act);
-		cls.push(notInvConstraints); // successor must satisfy inv. constraint
-		if (succ == 0)
-			cls.push(~model.primedError());
-		else
-			for (LitVec::const_iterator i = state(succ).latches.begin(); i != state(succ).latches.end();
-			     ++i)
-				cls.push(model.primeLit(~*i));
-		lifts->addClause_(cls);
-		// extract and assert primary inputs
-		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
-			Minisat::lbool val = fr.consecution->modelValue(i->var());
-			if (val != Minisat::l_Undef) {
-				Minisat::Lit pi = i->lit(val == Minisat::l_False);
-				state(st).inputs.push_back(pi); // record full inputs
-				assumps.push(pi);
-			}
-		}
-		// some properties include inputs, so assert primed inputs after
-		for (VarVec::const_iterator i = model.beginInputs(); i != model.endInputs(); ++i) {
-			Minisat::lbool pval = fr.consecution->modelValue(model.primeVar(*i).var());
-			if (pval != Minisat::l_Undef)
-				assumps.push(model.primeLit(i->lit(pval == Minisat::l_False)));
-		}
-		int sz = assumps.size();
-		// extract and assert latches
-		LitVec latches;
-		for (VarVec::const_iterator i = model.beginLatches(); i != model.endLatches(); ++i) {
-			Minisat::lbool val = fr.consecution->modelValue(i->var());
-			if (val != Minisat::l_Undef) {
-				Minisat::Lit la = i->lit(val == Minisat::l_False);
-				latches.push_back(la);
-				assumps.push(la);
-			}
-		}
-		orderAssumps(assumps, false, sz); // empirically found to be best choice
-		// State s, inputs i, transition relation T, successor t:
-		//   s & i & T & ~t' is unsat
-		// Core assumptions reveal a lifting of s.
 		++nQuery;
-		startTimer(); // stats
-		bool rv = lifts->solve(assumps);
+		startTimer();
+		vector<uint> p = gipsat->get_predecessor();
+		for (auto l : p) {
+			state(st).latches.push_back(Minisat::Lit{ l });
+		}
 		endTimer(satTime);
-		assert(!rv);
-		// obtain lifted latch set from unsat core
-		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-			if (lifts->conflict.has(~*i))
-				state(st).latches.push_back(*i); // record lifted latches
-		// deactivate negation of successor
-		lifts->releaseVar(~act);
 		return st;
 	}
 
 	// Checks if cube contains any initial states.
 	bool initiation(const LitVec &latches)
 	{
-		return !model.isInitial(latches);
+		return !model.cube_subsume_init((vector<uint> &)latches);
 	}
 
-	// Check if ~latches is inductive relative to frame fi.  If it's
-	// inductive and core is provided, extracts the unsat core.  If
-	// it's not inductive and pred is provided, extracts
-	// predecessor(s).
 	bool consecution(size_t fi, const LitVec &latches, size_t succ = 0, LitVec *core = NULL, size_t *pred = NULL,
 			 bool orderedCore = false)
 	{
-		Frame &fr = frames[fi];
-		MSLitVec assumps, cls;
-		assumps.capacity(1 + latches.size());
-		cls.capacity(1 + latches.size());
-		Minisat::Lit act = Minisat::mkLit(fr.consecution->newVar());
-		assumps.push(act);
-		cls.push(~act);
-		for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i) {
-			cls.push(~*i);
-			assumps.push(*i); // push unprimed...
-		}
-		// ... order... (empirically found to best choice)
+		LitVec assumps = latches;
 		if (pred)
-			orderAssumps(assumps, false, 1);
+			orderAssumps(assumps, false);
 		else
-			orderAssumps(assumps, orderedCore, 1);
-		// ... now prime
-		for (int i = 1; i < assumps.size(); ++i)
-			assumps[i] = model.primeLit(assumps[i]);
-		fr.consecution->addClause_(cls);
-		// F_fi & ~latches & T & latches'
+			orderAssumps(assumps, orderedCore);
 		++nQuery;
 		startTimer(); // stats
-		bool rv = fr.consecution->solve(assumps);
+		bool rv = gipsat->inductive(fi + 1, (vector<uint> &)assumps, true);
 		endTimer(satTime);
-		if (rv) {
-			// fails: extract predecessor(s)
+		if (!rv) {
 			if (pred)
-				*pred = stateOf(fr, succ);
-			fr.consecution->releaseVar(~act);
+				*pred = stateOf(succ);
 			return false;
 		}
-		// succeeds
 		if (core) {
 			if (pred && orderedCore) {
-				// redo with correctly ordered assumps
-				reverse(assumps + 1, assumps + assumps.size());
+				reverse(assumps.begin(), assumps.begin() + assumps.size());
 				++nQuery;
 				startTimer(); // stats
-				rv = fr.consecution->solve(assumps);
-				assert(!rv);
+				rv = gipsat->inductive(fi + 1, (vector<uint> &)assumps, true);
+				assert(rv);
 				endTimer(satTime);
 			}
-			for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-				if (fr.consecution->conflict.has(~model.primeLit(*i)))
-					core->push_back(*i);
-			if (!initiation(*core))
-				*core = latches;
+			vector<uint> c = gipsat->inductive_core();
+			*core = LitVec();
+			for (auto l : c) {
+				core->push_back(Minisat::Lit{ l });
+			}
 		}
-		fr.consecution->releaseVar(~act);
 		return true;
 	}
 
@@ -603,6 +482,7 @@ class IC3 {
 				}
 				return rv;
 			}
+			abort();
 			// prepare to obtain CTG
 			size_t cubeState = newState();
 			state(cubeState).successor = 0;
@@ -628,7 +508,7 @@ class IC3 {
 				++ctgs;
 				size_t j = level;
 				// QUERY: generalize then push or vice versa?
-				while (j <= k && consecution(j, ctgCore))
+				while (j < gipsat->level() && consecution(j, ctgCore))
 					++j;
 				mic(j - 1, ctgCore, recDepth + 1);
 				addCube(j, ctgCore);
@@ -667,6 +547,12 @@ class IC3 {
 		++nmic; // stats
 		// try dropping each literal in turn
 		size_t attempts = micAttempts;
+		vector<uint> domain;
+		for (auto l : cube) {
+			domain.push_back(l.x);
+			domain.push_back(model.lit_next(l.x));
+		}
+		gipsat->set_domain(level, domain);
 		orderCube(cube);
 		for (size_t i = 0; i < cube.size();) {
 			LitVec cp(cube.begin(), cube.begin() + i);
@@ -679,6 +565,14 @@ class IC3 {
 					if (lits.find(*j) != lits.end())
 						tmp.push_back(*j);
 				cube.swap(tmp);
+
+				gipsat->unset_domain(level);
+				vector<uint> domain;
+				for (auto l : cube) {
+					domain.push_back(l.x);
+					domain.push_back(model.lit_next(l.x));
+				}
+				gipsat->set_domain(level, domain);
 				// reset attempts
 				attempts = micAttempts;
 			} else {
@@ -689,11 +583,13 @@ class IC3 {
 					// a low micAttempts, but does it improve overall
 					// performance?
 					++nAbortMic; // stats
+					gipsat->unset_domain(level);
 					return;
 				}
 				++i;
 			}
 		}
+		gipsat->unset_domain(level);
 	}
 
 	// wrapper to start inductive generalization
@@ -702,27 +598,9 @@ class IC3 {
 		mic(level, cube, 1);
 	}
 
-	size_t earliest; // track earliest modified level in a major iteration
-
-	// Adds cube to frames at and below level, unless !toAll, in which
-	// case only to level.
-	void addCube(size_t level, LitVec &cube, bool toAll = true, bool silent = false)
+	void addCube(size_t level, LitVec &cube)
 	{
-		sort(cube.begin(), cube.end());
-		pair<CubeSet::iterator, bool> rv = frames[level].borderCubes.insert(cube);
-		if (!rv.second)
-			return;
-		if (!silent && verbose > 1)
-			cout << level << ": " << stringOfLitVec(cube) << endl;
-		earliest = min(earliest, level);
-		MSLitVec cls;
-		cls.capacity(cube.size());
-		for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
-			cls.push(~*i);
-		for (size_t i = toAll ? 1 : level; i <= level; ++i)
-			frames[i].consecution->addClause(cls);
-		if (toAll && !silent)
-			updateLitOrder(cube, level);
+		gipsat->add_lemma(level, (vector<uint> &)cube);
 	}
 
 	// ~cube was found to be inductive relative to level; now see if
@@ -734,7 +612,7 @@ class IC3 {
 		// push
 		do {
 			++level;
-		} while (level <= k && consecution(level, cube));
+		} while (level < gipsat->level() && consecution(level, cube));
 		addCube(level, cube);
 		return level;
 	}
@@ -755,7 +633,7 @@ class IC3 {
 				// at a higher level.
 				obls.erase(obli);
 				size_t n = generalize(obl.level, core);
-				if (n <= k)
+				if (n < gipsat->level())
 					obls.insert(Obligation(obl.state, n, obl.depth));
 			} else if (obl.level == 0) {
 				// No, in fact an initial state is a predecessor.
@@ -770,28 +648,20 @@ class IC3 {
 		return true;
 	}
 
-	bool trivial; // indicates whether strengthening was required
-		// during major iteration
-
-	// Strengthens frontier to remove error successors.
 	bool strengthen()
 	{
-		Frame &frontier = frames[k];
-		trivial = true; // whether any cubes are generated
-		earliest = k + 1; // earliest frame with enlarged borderCubes
 		while (true) {
 			++nQuery;
 			startTimer(); // stats
-			bool rv = frontier.consecution->solve(model.primedError());
+			bool rv = gipsat->has_bad();
 			endTimer(satTime);
 			if (!rv)
 				return true;
 			// handle CTI with error successor
 			++nCTI; // stats
-			trivial = false;
 			PriorityQueue pq;
 			// enqueue main obligation and handle
-			pq.insert(Obligation(stateOf(frontier), k - 1, 1));
+			pq.insert(Obligation(stateOf(), gipsat->level() - 1, 1));
 			if (!handleObligations(pq))
 				return false;
 			// finished with States for this iteration, so clean up
@@ -799,61 +669,9 @@ class IC3 {
 		}
 	}
 
-	// Propagates clauses forward using induction.  If any frame has
-	// all of its clauses propagated forward, then two frames' clause
-	// sets agree; hence those clause sets are inductive
-	// strengthenings of the property.  See the four invariants of IC3
-	// in the original paper.
 	bool propagate()
 	{
-		if (verbose > 1)
-			cout << "propagate" << endl;
-		// 1. clean up: remove c in frame i if c appears in frame j when i < j
-		CubeSet all;
-		for (size_t i = k + 1; i >= earliest; --i) {
-			Frame &fr = frames[i];
-			CubeSet rem, nall;
-			set_difference(fr.borderCubes.begin(), fr.borderCubes.end(), all.begin(), all.end(),
-				       inserter(rem, rem.end()), LitVecComp());
-			if (verbose > 1)
-				cout << i << " " << fr.borderCubes.size() << " " << rem.size() << " ";
-			fr.borderCubes.swap(rem);
-			set_union(rem.begin(), rem.end(), all.begin(), all.end(), inserter(nall, nall.end()),
-				  LitVecComp());
-			all.swap(nall);
-			for (CubeSet::const_iterator i = fr.borderCubes.begin(); i != fr.borderCubes.end(); ++i)
-				assert(all.find(*i) != all.end());
-			if (verbose > 1)
-				cout << all.size() << endl;
-		}
-		// 2. check if each c in frame i can be pushed to frame j
-		for (size_t i = trivial ? k : 1; i <= k; ++i) {
-			int ckeep = 0, cprop = 0, cdrop = 0;
-			Frame &fr = frames[i];
-			for (CubeSet::iterator j = fr.borderCubes.begin(); j != fr.borderCubes.end();) {
-				LitVec core;
-				if (consecution(i, *j, 0, &core)) {
-					++cprop;
-					// only add to frame i+1 unless the core is reduced
-					addCube(i + 1, core, core.size() < j->size(), true);
-					CubeSet::iterator tmp = j;
-					++j;
-					fr.borderCubes.erase(tmp);
-				} else {
-					++ckeep;
-					++j;
-				}
-			}
-			if (verbose > 1)
-				cout << i << " " << ckeep << " " << cprop << " " << cdrop << endl;
-			if (fr.borderCubes.empty())
-				return true;
-		}
-		// 3. simplify frames
-		for (size_t i = trivial ? k : 1; i <= k + 1; ++i)
-			frames[i].consecution->simplify();
-		lifts->simplify();
-		return false;
+		return gipsat->propagate();
 	}
 
 	int nQuery, nCTI, nCTG, nmic;
@@ -884,7 +702,7 @@ class IC3 {
 		if (!etime)
 			etime = 1;
 		cout << ". % SAT:        " << (int)(100 * (((double)satTime) / ((double)etime))) << endl;
-		cout << ". K:            " << k << endl;
+		cout << ". K:            " << gipsat->level() << endl;
 		cout << ". # Queries:    " << nQuery << endl;
 		cout << ". # CTIs:       " << nCTI << endl;
 		cout << ". # CTGs:       " << nCTG << endl;
@@ -898,7 +716,12 @@ class IC3 {
 			cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
 	}
 
-	friend bool check(Model &, int, bool, bool);
+	friend bool check(Transys &, int, bool, bool);
+
+	bool baseCases()
+	{
+		return !gipsat->has_bad();
+	}
 };
 
 // IC3 does not check for 0-step and 1-step reachability, so do it
@@ -928,6 +751,7 @@ bool baseCases(Model &model)
 
 static void statistic()
 {
+	glabol_gipsat->statistic();
 }
 
 static void handle_int(int int_num)
@@ -937,7 +761,7 @@ static void handle_int(int int_num)
 }
 
 // External function to make the magic happen.
-bool check(Model &model, int verbose, bool basic, bool random)
+bool check(Transys &model, int verbose, bool basic, bool random)
 {
 	signal(SIGINT, handle_int);
 	if (!baseCases(model)) {
@@ -945,6 +769,11 @@ bool check(Model &model, int verbose, bool basic, bool random)
 		return false;
 	}
 	IC3 ic3(model);
+	if (!ic3.baseCases()) {
+		statistic();
+		return false;
+	}
+
 	ic3.verbose = verbose;
 	if (basic) {
 		ic3.maxDepth = 0;
@@ -959,6 +788,7 @@ bool check(Model &model, int verbose, bool basic, bool random)
 		ic3.printWitness();
 	if (verbose)
 		ic3.printStats();
+	statistic();
 	return rv;
 }
 
