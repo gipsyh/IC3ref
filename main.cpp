@@ -36,6 +36,7 @@ int main(int argc, char **argv)
 	unsigned int propertyIndex = 0;
 	bool basic = false, random = false;
 	int verbose = 0;
+	string aig_file;
 	for (int i = 1; i < argc; ++i) {
 		if (string(argv[i]) == "-v")
 			// option: verbosity
@@ -52,13 +53,13 @@ int main(int argc, char **argv)
 			// option: use basic generalization
 			basic = true;
 		else
-			// optional argument: set property index
-			propertyIndex = (unsigned)atoi(argv[i]);
+			aig_file = string(argv[i]);
 	}
 
+	FILE* file = fopen(aig_file.c_str(), "r");
 	// read AIGER model
 	aiger *aig = aiger_init();
-	const char *msg = aiger_read_from_file(aig, stdin);
+	const char *msg = aiger_read_from_file(aig, file);
 	if (msg) {
 		cout << msg << endl;
 		return 0;

@@ -12,7 +12,7 @@ target_include_directories(ic3ref PUBLIC aiger minisat minisat/minisat/core mini
                                         minisat/minisat/mtl)
 
 add_subdirectory(minisat)
-target_link_libraries(ic3ref PUBLIC minisat-lib-shared)
+target_link_libraries(ic3ref PUBLIC minisat-lib-static)
 
 add_executable(ic3refmain main.cpp)
 target_link_libraries(ic3refmain PUBLIC ic3ref)
